@@ -1,6 +1,0 @@
-{
-  "version": "2.0.0",
-  "url": "https://raw.githubusercontent.com/bng1689-dev/C-auto-updates/main/CRIMES_AUTO_update_v2.0.0.zip",
-  "sha256": "7145d35784895400fa42413ee28addda0af0dc468e1e9beb54ba7424acd8c61a",
-  "notes": "เวอร์ชัน 2.0.0 — ⭐ บันทึกการทำงานโหมดทีละขั้น (เก็บภาพ/HTML/ผลแต่ละสเต็ป ไว้เป็นข้อมูลปรับปรุงระบบเมื่อเว็บ CRIMES เปลี่ยน) · ติดตั้งตรงไป C:\\Crimes-Automate ในคลิกเดียว (ติดตั้งลงเครื่อง.bat) · ตรวจอัปเดตอัตโนมัติจาก GitHub (ตั้ง URL ให้แล้ว) · build สร้าง manifest + SHA-256 ให้อัตโนมัติ · ความปลอดภัย: จำกัดสิทธิ์แก้ยอดเงิน/ตั้งค่าเครือข่ายเฉพาะผู้ดูแล + กันหน้าค้างจาก request ผิดรูปแบบ · แก้การนับแถวไฟล์ไม่มีหัวตาราง · แก้ line endings สคริปต์ Windows (.bat/.ps1) + UTF-8 BOM"
-}
