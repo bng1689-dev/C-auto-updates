@@ -32,6 +32,12 @@ var HUB_TOKEN = 'เปลี่ยนรหัสนี้ก่อนใช้
 var SHEET_NAME = 'counts';
 var PRESENCE_SHEET = 'presence';
 
+/** ข้อความที่ผู้ใช้ตั้งเอง (เช่น ชื่อที่แสดง) ต้องไม่กลายเป็นสูตรใน Sheet */
+function _safeStr(v) {
+  var s = String(v == null ? '' : v);
+  return /^[=+\-@]/.test(s) ? "'" + s : s;
+}
+
 function _presenceSheet() {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
   var sh = ss.getSheetByName(PRESENCE_SHEET);
@@ -48,14 +54,13 @@ function _upsertPresence(installId, appVersion, users, now) {
   var sh = _presenceSheet();
   var last = sh.getLastRow();
   var vals = last >= 2 ? sh.getRange(2, 1, last - 1, 6).getValues() : [];
-  var byKey = {};
-  vals.forEach(function (v) { byKey[String(v[1]) + '|' + String(v[2])] = v; });
-  users.forEach(function (u) {
-    byKey[String(installId) + '|' + String(u.uid)] =
-      [now, String(installId), String(u.uid), String(u.display_name || ''),
-       String(u.app_version || appVersion || ''), String(u.last_seen || '')];
+  // แทนที่รายชื่อของเครื่องนี้ทั้งชุด — คนที่ถูกลบ/ปิดใช้งานแล้วจะหายจากศูนย์กลางด้วย
+  var keep = vals.filter(function (v) { return String(v[1]) !== String(installId); });
+  var fresh = users.map(function (u) {
+    return [now, String(installId), String(u.uid), _safeStr(u.display_name),
+            _safeStr(u.app_version || appVersion), _safeStr(u.last_seen)];
   });
-  var out = Object.keys(byKey).map(function (k) { return byKey[k]; });
+  var out = keep.concat(fresh);
   if (vals.length) sh.getRange(2, 1, vals.length, 6).clearContent();
   if (out.length) sh.getRange(2, 1, out.length, 6).setValues(out);
 }
@@ -117,7 +122,7 @@ function doPost(e) {
       if (rows.length) {
         var out = rows.map(function (r) {
           return [now, data.install_id, data.app_version, data.ym, r.date, r.uid,
-                  r.display_name, r.searches, r.found, r.notfound, r.error,
+                  _safeStr(r.display_name), r.searches, r.found, r.notfound, r.error,
                   r.files, r.amount_in, r.amount_out];
         });
         sh.getRange(sh.getLastRow() + 1, 1, out.length, out[0].length).setValues(out);
