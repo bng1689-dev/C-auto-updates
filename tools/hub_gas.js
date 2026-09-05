@@ -4,6 +4,11 @@
  * รับ "ตัวเลขนับ" จากเครื่องลูกแต่ละเครื่องมาเก็บใน Google Sheet
  * ไม่มีข้อมูลประวัติ เลขบัตร ชื่อผู้ถูกค้น ผลคดี หรือชื่อไฟล์งาน ส่งมาที่นี่
  *
+ * v3.2.0: เพิ่มชีต 'presence' — ใครใช้เวอร์ชันไหน/เห็นล่าสุดเมื่อไร (ชื่อที่แสดง · uid ·
+ * เวอร์ชัน · เวลา) เพื่อให้ผู้ดูแลเห็นสมาชิกทุกเครื่องแบบเรียลไทม์ · โปรแกรมส่งก้อน
+ * kind="presence" (ไม่มี rows) บ่อยกว่าก้อนตัวเลข — ก้อนนี้ต้องไม่ลบตัวเลขเดือนที่เก็บไว้
+ * ** ต้อง Deploy ใหม่ (New deployment) หลังวางโค้ดรุ่นนี้ ไม่งั้นเครื่องลูกยังคุยกับโค้ดเก่า **
+ *
  * ── วิธีติดตั้ง ────────────────────────────────────────────────
  * 1. สร้าง Google Sheet ใหม่ 1 ไฟล์ (จะใช้เก็บข้อมูล)
  * 2. เมนู Extensions → Apps Script  แล้ววางโค้ดนี้ทับทั้งหมด
@@ -25,6 +30,35 @@
 
 var HUB_TOKEN = 'เปลี่ยนรหัสนี้ก่อนใช้งานจริง';
 var SHEET_NAME = 'counts';
+var PRESENCE_SHEET = 'presence';
+
+function _presenceSheet() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var sh = ss.getSheetByName(PRESENCE_SHEET);
+  if (!sh) {
+    sh = ss.insertSheet(PRESENCE_SHEET);
+    sh.appendRow(['received_at', 'install_id', 'uid', 'display_name', 'app_version', 'last_seen']);
+    sh.setFrozenRows(1);
+  }
+  return sh;
+}
+
+/** อัปเดตสถานะรายคนของเครื่องนี้ (แทนที่แถวเดิมของ install_id|uid ถ้ามี) */
+function _upsertPresence(installId, appVersion, users, now) {
+  var sh = _presenceSheet();
+  var last = sh.getLastRow();
+  var vals = last >= 2 ? sh.getRange(2, 1, last - 1, 6).getValues() : [];
+  var byKey = {};
+  vals.forEach(function (v) { byKey[String(v[1]) + '|' + String(v[2])] = v; });
+  users.forEach(function (u) {
+    byKey[String(installId) + '|' + String(u.uid)] =
+      [now, String(installId), String(u.uid), String(u.display_name || ''),
+       String(u.app_version || appVersion || ''), String(u.last_seen || '')];
+  });
+  var out = Object.keys(byKey).map(function (k) { return byKey[k]; });
+  if (vals.length) sh.getRange(2, 1, vals.length, 6).clearContent();
+  if (out.length) sh.getRange(2, 1, out.length, 6).setValues(out);
+}
 
 function _sheet() {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
@@ -70,22 +104,31 @@ function doPost(e) {
       return _json({ ok: false, error: 'ลายเซ็นไม่ถูกต้อง' });
     }
     var data = JSON.parse(body);
-    var rows = data.rows || [];
-    var sh = _sheet();
     var now = new Date();
+    var stored = 0;
 
-    // ส่งซ้ำเดือนเดิมจากเครื่องเดิม = แทนที่ของเก่า ไม่ใช่เพิ่มซ้ำ
-    _deleteExisting(sh, data.install_id, data.ym);
-
-    if (rows.length) {
-      var out = rows.map(function (r) {
-        return [now, data.install_id, data.app_version, data.ym, r.date, r.uid,
-                r.display_name, r.searches, r.found, r.notfound, r.error,
-                r.files, r.amount_in, r.amount_out];
-      });
-      sh.getRange(sh.getLastRow() + 1, 1, out.length, out[0].length).setValues(out);
+    // ตัวเลขรายเดือน: เฉพาะเมื่อก้อนนี้มี rows เป็นอาร์เรย์จริง ๆ
+    // (ก้อน presence ไม่มี rows — ต้องไม่ไปลบตัวเลขที่เก็บไว้)
+    if (Array.isArray(data.rows) && data.ym) {
+      var rows = data.rows;
+      var sh = _sheet();
+      // ส่งซ้ำเดือนเดิมจากเครื่องเดิม = แทนที่ของเก่า ไม่ใช่เพิ่มซ้ำ
+      _deleteExisting(sh, data.install_id, data.ym);
+      if (rows.length) {
+        var out = rows.map(function (r) {
+          return [now, data.install_id, data.app_version, data.ym, r.date, r.uid,
+                  r.display_name, r.searches, r.found, r.notfound, r.error,
+                  r.files, r.amount_in, r.amount_out];
+        });
+        sh.getRange(sh.getLastRow() + 1, 1, out.length, out[0].length).setValues(out);
+      }
+      stored = rows.length;
     }
-    return _json({ ok: true, stored: rows.length });
+    // สถานะสมาชิก (v3.2.0): มากับทั้งก้อนตัวเลขและก้อน presence
+    if (Array.isArray(data.users)) {
+      _upsertPresence(data.install_id, data.app_version, data.users, now);
+    }
+    return _json({ ok: true, stored: stored, kind: data.kind || 'counts' });
   } catch (err) {
     return _json({ ok: false, error: String(err).slice(0, 200) });
   }
@@ -142,7 +185,17 @@ function doGet(e) {
     rows.forEach(function (r) { r.net = Math.round((r.amount_in - r.amount_out) * 100) / 100; });
     rows.sort(function (a, b) { return b.searches - a.searches; });
     totals.net = Math.round((totals.amount_in - totals.amount_out) * 100) / 100;
-    return _json({ ok: true, ym: ym, rows: rows, totals: totals });
+    // v3.2.0: สถานะสมาชิกทุกเครื่อง
+    var psh = _presenceSheet();
+    var plast = psh.getLastRow();
+    var presence = plast >= 2 ? psh.getRange(2, 1, plast - 1, 6).getValues().map(function (v) {
+      var ra = v[0];
+      return { received_at: (ra && ra.toISOString) ? ra.toISOString() : String(ra || ''),
+               install_id: String(v[1]), uid: String(v[2]), display_name: String(v[3]),
+               app_version: String(v[4]), last_seen: String(v[5]) };
+    }) : [];
+    presence.sort(function (a, b) { return (b.received_at > a.received_at) ? 1 : -1; });
+    return _json({ ok: true, ym: ym, rows: rows, totals: totals, presence: presence });
   } catch (err) {
     return _json({ ok: false, error: String(err).slice(0, 200) });
   }
