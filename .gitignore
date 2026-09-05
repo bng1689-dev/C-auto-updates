@@ -1,0 +1,4 @@
+
+# กุญแจลับสำหรับออก KEY — ห้ามขึ้น git เด็ดขาด
+crimes_license_private.json
+*.key
