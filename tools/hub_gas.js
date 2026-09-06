@@ -7,7 +7,11 @@
  * v3.2.0: เพิ่มชีต 'presence' — ใครใช้เวอร์ชันไหน/เห็นล่าสุดเมื่อไร (ชื่อที่แสดง · uid ·
  * เวอร์ชัน · เวลา) เพื่อให้ผู้ดูแลเห็นสมาชิกทุกเครื่องแบบเรียลไทม์ · โปรแกรมส่งก้อน
  * kind="presence" (ไม่มี rows) บ่อยกว่าก้อนตัวเลข — ก้อนนี้ต้องไม่ลบตัวเลขเดือนที่เก็บไว้
- * ** ต้อง Deploy ใหม่ (New deployment) หลังวางโค้ดรุ่นนี้ ไม่งั้นเครื่องลูกยังคุยกับโค้ดเก่า **
+ *
+ * ** หลังวางโค้ดรุ่นนี้ทับ ต้องอัปเดตการ Deploy ให้ใช้โค้ดใหม่ ด้วยวิธีนี้เท่านั้น: **
+ *    Deploy → Manage deployments → (อันที่ใช้อยู่) ไอคอนดินสอ ✏ → Version: New version → Deploy
+ *    ห้ามใช้ "New deployment" เพราะจะได้ URL /exec อันใหม่ เครื่องลูกทุกเครื่องจะยังคุยกับ
+ *    สคริปต์ตัวเก่าและข้อมูลสถานะจะไม่เข้าโดยไม่มีใครรู้
  *
  * ── วิธีติดตั้ง ────────────────────────────────────────────────
  * 1. สร้าง Google Sheet ใหม่ 1 ไฟล์ (จะใช้เก็บข้อมูล)
@@ -99,8 +103,20 @@ function _json(obj) {
     .setMimeType(ContentService.MimeType.JSON);
 }
 
+/** กันสองเครื่องเขียนชีตพร้อมกันแล้วข้อมูลหาย (อ่าน-ล้าง-เขียนทับ ต้องทำทีละคน)
+ *  รอได้สูงสุด 25 วิ แล้วค่อยยอมแพ้ — ฝั่งเครื่องลูกส่งใหม่รอบหน้าอยู่แล้ว */
+function _withLock(fn) {
+  var lock = LockService.getScriptLock();
+  if (!lock.tryLock(25000)) return _json({ ok: false, error: 'ศูนย์กลางกำลังยุ่ง ลองใหม่อีกครั้ง' });
+  try { return fn(); } finally { lock.releaseLock(); }
+}
+
 /** รับข้อมูลจากเครื่องลูก */
 function doPost(e) {
+  return _withLock(function () { return _doPostLocked(e); });
+}
+
+function _doPostLocked(e) {
   try {
     var body = (e && e.postData && e.postData.contents) || '';
     // ลายเซ็นมากับ query string เพราะ Apps Script อ่าน HTTP header ที่ผู้เรียกกำหนดเองไม่ได้
@@ -157,6 +173,10 @@ function _deleteExisting(sh, installId, ym) {
 
 /** คืนยอดรวมของทุกเครื่อง ให้โปรแกรมดึงไปแสดงบนกระดาน */
 function doGet(e) {
+  return _withLock(function () { return _doGetLocked(e); });
+}
+
+function _doGetLocked(e) {
   try {
     var ym = (e && e.parameter && e.parameter.ym) || '';
     var sig = (e && e.parameter && e.parameter.sign) || '';
