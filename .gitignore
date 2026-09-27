@@ -2,3 +2,10 @@
 # กุญแจลับสำหรับออก KEY — ห้ามขึ้น git เด็ดขาด
 crimes_license_private.json
 *.key
+
+# ผลผลิตของเครื่องมือ/ทดสอบ — ไม่ขึ้น git
+build/
+__pycache__/
+*.pyc
+*.tmp
+.pytest_cache/
