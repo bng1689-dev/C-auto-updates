@@ -3,8 +3,8 @@
  * รัน tools/hub_gas.js (สคริปต์ศูนย์กลางตัวจริง) นอก Google — จำลอง SpreadsheetApp/Utilities/LockService/ContentService
  * แผ่นงานเก็บในไฟล์ JSON (argv[2]) จึงเรียกซ้ำหลายครั้งได้เหมือนคุยกับ Sheet ใบเดิม (หลายเครื่องใช้ร่วมกัน)
  *
- *   echo '{"method":"POST","body":"...","parameter":{"sign":"..."}}' | node gas_harness.js state.json TOKEN
- *   → พิมพ์ JSON ที่ doPost/doGet ตอบ
+ *   echo '{"method":"POST","body":"...","parameter":{"sign":"...","asign":"..."}}' | node gas_harness.js state.json TOKEN [ADMIN_TOKEN]
+ *   → พิมพ์ JSON ที่ doPost/doGet ตอบ   (ไม่ให้ ADMIN_TOKEN = สคริปต์ยังใช้ค่าตั้งต้น → ไม่รับลายเซ็นผู้ดูแล)
  *
  * ใช้เฉพาะในชุดทดสอบ (tests/test_v370.py) — ไม่ได้ส่งไปกับแพ็กเกจ
  */
@@ -16,6 +16,7 @@ const path = require('path');
 
 const stateFile = process.argv[2];
 const token = process.argv[3] || 'test-token';
+const adminToken = process.argv[4] || '';
 // ล็อกไฟล์แทน LockService ของ Google — หลายเครื่อง (หลายโปรเซส) เรียกพร้อมกันต้องอ่าน-เขียน Sheet ทีละคน
 const lockPath = stateFile + '.lock';
 const t0 = Date.now();
@@ -97,6 +98,7 @@ const sandbox = {
 vm.createContext(sandbox);
 let src = fs.readFileSync(path.join(__dirname, '..', 'tools', 'hub_gas.js'), 'utf8');
 src = src.replace(/var HUB_TOKEN = '[^']*';/, "var HUB_TOKEN = " + JSON.stringify(token) + ";");
+if (adminToken) src = src.replace(/var ADMIN_TOKEN = '[^']*';/, "var ADMIN_TOKEN = " + JSON.stringify(adminToken) + ";");
 vm.runInContext(src, sandbox, { filename: 'hub_gas.js' });
 
 const req = JSON.parse(fs.readFileSync(0, 'utf8') || '{}');
