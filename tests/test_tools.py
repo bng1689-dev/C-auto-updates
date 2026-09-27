@@ -66,9 +66,9 @@ def make_repo():
     release.CHANGELOG = TMP / "CHANGELOG.md"
 
 
-def build(version, allow=False):
+def build(version, allow=False, remove=None):
     args = types.SimpleNamespace(version=version, notes=f"เวอร์ชัน {version} — ทดสอบ", open=False,
-                                 overwrite=False, allow_new_files=allow)
+                                 overwrite=False, allow_new_files=allow, remove=list(remove or []))
     try:
         release.cmd_build(args)
         return "ok"
@@ -133,6 +133,20 @@ def main():
     bad.unlink()
     check("manifest ยังชี้รุ่นเดิม (1.0.1) เมื่อ build ไม่ผ่าน",
           json.loads((TMP / "update-manifest.json").read_text(encoding="utf-8"))["version"] == "1.0.1")
+
+    print("\n── build: ตัดไฟล์ที่เลิกใช้ (--remove · v3.8.0) ──")
+    res = build("1.0.2", remove=["app/backend/nothere.py"])
+    check("--remove ไฟล์ที่ไม่มีในรุ่นก่อน → หยุด", res.startswith("exit") and "nothere.py" in res, res)
+    res = build("1.0.2", remove=["app/backend/newmod.py"])
+    out = TMP / f"{PKG}_v1.0.2.zip"
+    with zipfile.ZipFile(out) as z:
+        names = z.namelist()
+    check("--remove → ไฟล์หายจาก zip · ไฟล์เดิมอื่นครบ · สำเนาใน build/ ถูกลบ (รอบหน้าไม่ถูกมองเป็นไฟล์ใหม่)",
+          res == "ok" and f"{PKG}/app/backend/newmod.py" not in names and all(n in names for n in FILES)
+          and not (app / "backend" / "newmod.py").exists(), f"{res} {names}")
+    mf = json.loads((TMP / "update-manifest.json").read_text(encoding="utf-8"))
+    check("manifest ชี้ 1.0.2 และ sha256 ตรงกับ zip ที่ตัดไฟล์แล้ว",
+          mf["version"] == "1.0.2" and mf["sha256"] == hashlib.sha256(out.read_bytes()).hexdigest())
 
     print("\n── verify: เทียบของออนไลน์จริง ──")
     mf = json.loads((TMP / "update-manifest.json").read_text(encoding="utf-8"))
