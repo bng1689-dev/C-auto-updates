@@ -108,7 +108,7 @@ def make_file(path):
         else:
             ws.cell(r, 2, v)
         if res:
-            ws.cell(r, 5, res)
+            ws.cell(r, 6, res)        # ผลเดิม/ERROR เดิมอยู่คอลัมน์ F (v3.6.0: ผลอยู่ F เสมอ)
     tmp = path.with_suffix(".tmp.xlsx")
     wb.save(tmp)
     # แก้ XML ตรง ๆ ให้เหมือนไฟล์จริงจากโปรแกรมอื่น: สูตรที่มีค่าคำนวณไว้ + ตัวเลขทศนิยมแบบ E+
@@ -255,7 +255,11 @@ def main():
         wb = openpyxl.load_workbook(job["path"])
         ws = wb.active
         B = {r: ws.cell(r, 2).value for r, *_ in ROWS}
-        E = {r: ws.cell(r, 5).value for r, *_ in ROWS}
+        E = {r: ws.cell(r, 6).value for r, *_ in ROWS}     # v3.6.0: ผลอยู่คอลัมน์ F เสมอ
+        check("v3.6.0 ผลเขียนที่คอลัมน์ F แม้ไฟล์มีหัว 'ผล' อยู่ที่คอลัมน์ E (E ไม่ถูกแตะ)",
+              all(ws.cell(r, 5).value is None for r, *_ in ROWS) and ws.cell(1, 5).value == "ผล",
+              str([ws.cell(r, 5).value for r, *_ in ROWS]))
+        check("คิวรายงานคอลัมน์ผลเป็น F", job.get("out_col") == "F", str(job.get("out_col")))
         fill = lambda r: (ws.cell(r, 2).fill.start_color.rgb or "")[-6:]
         check("(4) เลข 12 หลักถูกเติม 0 ข้างหน้า + มาร์คเหลือง (แถวค้น)",
               B[3] == "0123456789012" and fill(3) == "FFFF00", f"{B[3]!r} {fill(3)}")
@@ -346,7 +350,7 @@ def main():
               s["state"] in ("stopped", "error") and "Chrome" in s["message"], s["message"])
         job2 = engine.load_queue()[0]
         ws2 = openpyxl.load_workbook(job2["path"]).active
-        res2 = [ws2.cell(2 + i, 5).value for i in range(3)]
+        res2 = [ws2.cell(2 + i, 6).value for i in range(3)]      # v3.6.0: ผลอยู่คอลัมน์ F เสมอ
         check("ไม่เขียน ERROR ไล่ทุกแถวที่เหลือหลัง Chrome ถูกปิด",
               not any("ERROR" in str(v or "") for v in res2), str(res2))
         check("แถวที่ค้นได้ก่อนปิดถูกบันทึกลงไฟล์แล้ว", res2[0] == " - ", str(res2))
