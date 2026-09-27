@@ -84,7 +84,10 @@ def main():
             for ln in fails[:12]:
                 print("     " + ln.strip()[:160])
             if not m:
-                print("     (ไม่มีบรรทัดสรุปผล — โปรเซสน่าจะล้มก่อนจบ; รันไฟล์นี้ตรง ๆ เพื่อดูรายละเอียด)")
+                # ล้มก่อนจบ (เช่นรอ selector ไม่ทัน) — โชว์ท้ายบันทึกเพื่อให้รู้ว่าตกที่ข้อไหน/บรรทัดไหน (CI ดูได้เลย)
+                print("     (ไม่มีบรรทัดสรุปผล — โปรเซสล้มก่อนจบ; ท้ายบันทึกของไฟล์นี้:)")
+                for ln in [x for x in out.splitlines() if x.strip()][-25:]:
+                    print("     │ " + ln.rstrip()[:200])
     bad = [r for r in rows if r[0] == "✗"]
     print(f"\nรวม: ผ่าน {total_pass} · ตก {total_fail} · ไฟล์ที่มีปัญหา {len(bad)}/{len(rows)}")
     return 1 if bad else 0
