@@ -1,0 +1,27 @@
+name: tests
+
+# รันชุดทดสอบทั้งหมดกับแพ็กเกจรุ่นล่าสุด (zip ตาม update-manifest.json) ทุกครั้งที่มี PR หรือ push เข้า main
+# ชุดเบราว์เซอร์ใช้ Chromium ของ Playwright — ไม่ต้องมี Chrome จริง
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: ติดตั้งไลบรารีที่ชุดทดสอบใช้
+        run: pip install flask waitress openpyxl playwright
+      - name: ติดตั้ง Chromium สำหรับ Playwright
+        run: python -m playwright install --with-deps chromium
+      - name: ชุดทดสอบที่ไม่ใช้เบราว์เซอร์
+        run: python tests/run_all.py --quick
+      - name: ชุดทดสอบเบราว์เซอร์ (smoke · run-bar · announce · end-to-end)
+        run: python tests/run_all.py --only announce runbar ui_smoke e2e

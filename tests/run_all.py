@@ -1,0 +1,93 @@
+#!/usr/bin/env python3
+"""รันชุดทดสอบทั้งหมดของ CRIMES AUTO แล้วสรุปเป็นตาราง — ออกรหัส 1 ถ้ามีข้อใดตก
+
+    python tests/run_all.py            # ทั้งหมด (ต้องมี Chromium: python -m playwright install chromium)
+    python tests/run_all.py --quick    # เฉพาะชุดที่ไม่เปิดเบราว์เซอร์ (~1 นาที)
+    python tests/run_all.py --only v350 e2e
+
+แต่ละไฟล์รันเป็นโปรเซสแยก (ฐานข้อมูล/โฟลเดอร์ชั่วคราวของตัวเอง ไม่ปนกัน) และรันทีละไฟล์
+เพราะบางชุดผูกพอร์ตตายตัว (8791 · 8797 · 8799 · 8801/8802)
+"""
+import argparse
+import os
+import re
+import subprocess
+import sys
+import tempfile
+import time
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+# ลำดับ: เร็ว/ไม่ใช้เบราว์เซอร์ก่อน แล้วค่อยชุดเบราว์เซอร์ (ช้ากว่า)
+SUITES = [
+    # (ไฟล์, ใช้เบราว์เซอร์ไหม, คำอธิบาย)
+    ("test_v2100.py", False, "เหตุผลการค้นตอนกดเริ่ม"),
+    ("test_v300.py", False, "ขออนุมัติอัปเดต · เก็บกวาดหลังอัปเดต · แท็บสมาชิก"),
+    ("test_v310.py", False, "กองกลาง · Balance ตามสิทธิ์ · สิทธิ์อัปเดตรายคน"),
+    ("test_v320.py", False, "เชื่อมข้อมูลเรียลไทม์ · รหัสเชื่อมต่อ · presence"),
+    ("test_v330.py", False, "ประวัติแยกรายบุคคล · รุ่น open"),
+    ("test_v350.py", False, "ตัวอ่านเลขบัตร · จัดกลุ่ม error · ความคืบหน้าจากไฟล์ · คิว"),
+    ("test_v351.py", False, "พบคดีแต่ไม่มีข้อหา → เหลืองทั้งแถว"),
+    ("test_boot.py", False, "การเปิดโปรแกรม (desktop.py) — จอขาว/พอร์ตค้าง"),
+    ("test_announce.py", True, "ปิดกล่อง 'มีอะไรใหม่' ของเว็บ CRIMES"),
+    ("test_runbar.py", True, "แถบสถานะ/ปุ่มควบคุมรอบค้น + เข้าสู่ระบบใหม่"),
+    ("test_ui_smoke.py", True, "ไล่ครบทุกเมนูบน Chromium จริง ต้องไม่มี JS error"),
+    ("test_e2e.py", True, "ทั้งระบบ: worker จริง + เว็บ CRIMES จำลอง"),
+]
+RESULT_RE = re.compile(r"ผล: ผ่าน (\d+) · ตก (\d+)")
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--quick", action="store_true", help="ข้ามชุดที่ต้องใช้เบราว์เซอร์")
+    ap.add_argument("--only", nargs="*", default=None, help="รันเฉพาะไฟล์ที่ชื่อมีคำนี้")
+    ap.add_argument("--timeout", type=int, default=900, help="วินาทีต่อไฟล์")
+    args = ap.parse_args()
+
+    picked = []
+    for name, browser, desc in SUITES:
+        if args.quick and browser:
+            continue
+        if args.only and not any(k in name for k in args.only):
+            continue
+        picked.append((name, browser, desc))
+    if not picked:
+        print("ไม่มีชุดทดสอบตรงเงื่อนไข")
+        return 2
+
+    rows = []
+    total_pass = total_fail = 0
+    for name, browser, desc in picked:
+        env = dict(os.environ, PYTHONUNBUFFERED="1", PYTHONIOENCODING="utf-8",
+                   CRIMES_UPLOAD_DIR=tempfile.mkdtemp(prefix="crimes_up_"))
+        t0 = time.time()
+        try:
+            r = subprocess.run([sys.executable, str(HERE / name)], env=env, cwd=str(HERE),
+                               capture_output=True, text=True, timeout=args.timeout)
+            out = (r.stdout or "") + (r.stderr or "")
+            code = r.returncode
+        except subprocess.TimeoutExpired as e:
+            out = ((e.stdout or b"").decode("utf-8", "replace") if isinstance(e.stdout, bytes) else (e.stdout or "")) + "\n[หมดเวลา]"
+            code = 124
+        secs = time.time() - t0
+        m = RESULT_RE.findall(out)
+        p, f = (int(m[-1][0]), int(m[-1][1])) if m else (0, 0)
+        ok = code == 0 and f == 0 and m
+        total_pass += p
+        total_fail += f if m else 0
+        status = "✓" if ok else "✗"
+        rows.append((status, name, p, f, secs, desc))
+        print(f"{status} {name:20s} ผ่าน {p:3d} · ตก {f:2d} · {secs:5.0f}s  — {desc}", flush=True)
+        if not ok:
+            fails = [ln for ln in out.splitlines() if "✗" in ln or "Traceback" in ln or "Error" in ln]
+            for ln in fails[:12]:
+                print("     " + ln.strip()[:160])
+            if not m:
+                print("     (ไม่มีบรรทัดสรุปผล — โปรเซสน่าจะล้มก่อนจบ; รันไฟล์นี้ตรง ๆ เพื่อดูรายละเอียด)")
+    bad = [r for r in rows if r[0] == "✗"]
+    print(f"\nรวม: ผ่าน {total_pass} · ตก {total_fail} · ไฟล์ที่มีปัญหา {len(bad)}/{len(rows)}")
+    return 1 if bad else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
