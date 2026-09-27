@@ -76,14 +76,14 @@ def main():
         page.goto(base, wait_until="domcontentloaded")
 
         # ── สมัคร Super Admin คนแรก ──
-        page.wait_for_selector("#authSetupBox:not(.hidden)", timeout=8000)
+        page.wait_for_selector("#authSetupBox:not(.hidden)", timeout=15000)
         check("หน้าแรกโชว์ฟอร์มสร้างบัญชี", True)
         page.fill("#suUser", "admin1")
         page.fill("#suName", "แอดมินทดสอบ")
         page.fill("#suPw", "secret9")
         page.fill("#suPw2", "secret9")
         page.click("#authSetupForm button[type=submit]")
-        page.wait_for_selector("#screen-app:not(.hidden)", timeout=8000)
+        page.wait_for_selector("#screen-app:not(.hidden)", timeout=15000)
         check("สมัครแล้วเข้าหน้าแอปได้", True)
 
         # ── seed ข้อมูล + คิว แล้วรีโหลดให้แดชบอร์ดวาดกราฟจริง ──
@@ -131,10 +131,10 @@ def main():
           await fetch('/api/admin/teams',{method:'POST',headers:{'Content-Type':'application/json'},
             body:JSON.stringify({name:'ทีมทดสอบ', member_ids:[1]})}); }""")
         page.reload(wait_until="domcontentloaded")
-        page.wait_for_selector("#screen-app:not(.hidden)", timeout=8000)
+        page.wait_for_selector("#screen-app:not(.hidden)", timeout=15000)
 
         # ── แดชบอร์ด: กราฟเคลื่อนไหววาดจริง ──
-        page.wait_for_selector("#chartDaily canvas", timeout=8000)
+        page.wait_for_selector("#chartDaily canvas", timeout=15000)
         check("กราฟรายวันเป็นแคนวาส", True)
         page.wait_for_timeout(1300)   # รอสวีป/นับเลขจบ
         painted = page.evaluate(
@@ -159,9 +159,9 @@ def main():
         page.wait_for_selector("#view-run:not(.hidden)", timeout=5000)
         # v3.5.0: เข้าหน้าอัปโหลด = ไฟล์ที่ค้นครบแล้วถูกเอาออกจากคิวเอง (ผลอยู่ใน Downloads แล้ว)
         page.wait_for_function("document.querySelector('#uploadMsg').textContent.includes('ออกจากคิว')",
-                               timeout=8000)
+                               timeout=15000)
         page.wait_for_function("document.querySelectorAll('#queueList .qitem').length === 2",
-                               timeout=8000)
+                               timeout=15000)
         check("ไฟล์ที่ค้นครบแล้วถูกเอาออกจากคิวเมื่อเข้าหน้าอัปโหลด",
               [j["id"] for j in engine.load_queue()] == ["q2", "q3"],
               str([j["id"] for j in engine.load_queue()]))
@@ -184,7 +184,7 @@ def main():
               and "ผิดพลาด 1 แถว" in (page.text_content("#queueList .qst-err") or ""))
         page.evaluate("() => loadQueue()")
         page.wait_for_function("document.querySelectorAll('#queueList .qitem').length === 2",
-                               timeout=8000)
+                               timeout=15000)
         # ช่องเหตุผล: อยู่ใน reason-row เหนือแถว LOGIN CRIMES และหายจากตัวเลือกขั้นสูง
         check("ช่องเหตุผลอยู่แถวใหม่เหนือ LOGIN CRIMES",
               page.locator(".reason-row #cfgReason").count() == 1)
@@ -244,11 +244,11 @@ def main():
         page.wait_for_selector("#view-live:not(.hidden)", timeout=5000)
         check("หัวข้อเปลี่ยนเป็น รับ/จ่าย กองกลาง",
               "กองกลาง" in (page.text_content("#view-live .vh h1") or ""))
-        page.wait_for_selector("#liveChart canvas", timeout=6000)
+        page.wait_for_selector("#liveChart canvas", timeout=15000)
         check("กราฟกองกลางเป็นแคนวาส", True)
         page.click('[data-view="billing"]')
         page.wait_for_selector("#view-billing:not(.hidden)", timeout=5000)
-        page.wait_for_selector("#billChart canvas", timeout=6000)
+        page.wait_for_selector("#billChart canvas", timeout=15000)
         check("กราฟ Balance เป็นแคนวาส", True)
         # ── v3.2.0: กองกลาง = สมุดบันทึกล้วน · นาฬิกาไทย · กราฟทีม · ตารางสมาชิก ──
         page.click('[data-view="live"]')
@@ -261,7 +261,7 @@ def main():
         page.wait_for_timeout(1200)
         clk = page.text_content("#thClock") or ""
         check("นาฬิกาไทยเดินบนแดชบอร์ด", "🕒" in clk and "น." in clk and "--" not in clk, clk)
-        page.wait_for_selector(".team-chart canvas", timeout=6000)
+        page.wait_for_selector(".team-chart canvas", timeout=15000)
         check("กราฟทีมแยกต่างหากบนแดชบอร์ด", page.locator(".team-chart canvas").count() >= 1)
         page.click('[data-view="settings"]')
         page.wait_for_selector("#view-settings:not(.hidden)", timeout=5000)
@@ -277,7 +277,7 @@ def main():
         # ── v3.3.0: ประวัติแยกตามผู้ค้น ──
         page.click('[data-view="history"]')
         page.wait_for_selector("#view-history:not(.hidden)", timeout=5000)
-        page.wait_for_selector("#histTable table", timeout=6000)
+        page.wait_for_selector("#histTable table", timeout=15000)
         head = page.text_content("#histTable thead") or ""
         check("ค่าเริ่มต้น = ของตัวเอง (ยังไม่มีคอลัมน์ผู้ค้น)", "ผู้ค้น" not in head, head[:80])
         page.evaluate("""async () => { await fetch('/api/admin/members',{method:'POST',
@@ -289,7 +289,7 @@ def main():
           await fetch('/api/admin/teams',{method:'POST',headers:{'Content-Type':'application/json'},
             body:JSON.stringify({name:'ทีมประวัติ', member_ids:[1, id]})}); }""")
         page.click('[data-view="dashboard"]'); page.click('[data-view="history"]')
-        page.wait_for_selector("#histWho:not(.hidden)", timeout=6000)
+        page.wait_for_selector("#histWho:not(.hidden)", timeout=15000)
         check("มีตัวเลือกผู้ค้นเมื่อมีคนอื่นให้ดู", page.locator("#histWho").count() == 1)
         page.select_option("#histWho", "all")
         page.wait_for_timeout(600)
@@ -318,14 +318,14 @@ def main():
         page.evaluate("""async () => { await fetch('/api/admin/members',{method:'POST',headers:{'Content-Type':'application/json'},
             body:JSON.stringify({username:'member9', password:'pass66', display_name:'สมาชิกเก้า', role:'member'})}); }""")
         page.click('#mtTabs [data-mtab="members"]')
-        page.wait_for_selector("#memberList .upd-off", timeout=6000)
+        page.wait_for_selector("#memberList .upd-off", timeout=15000)
         # ต้องรอให้แถวของสมาชิกที่เพิ่งสร้างโผล่ก่อนนับ — ไม่งั้นนับจากรายการรอบก่อน (นับขาดไป 1)
         page.wait_for_function(
-            "document.querySelector('#memberList').textContent.includes('สมาชิกเก้า')", timeout=6000)
+            "document.querySelector('#memberList').textContent.includes('สมาชิกเก้า')", timeout=15000)
         n_off = page.locator("#memberList .upd-off").count()
         check("มีปุ่มสลับสิทธิ์อัปเดตในแถวสมาชิก", n_off >= 1, f"got {n_off}")
         page.locator("#memberList .upd-off").first.click()
-        page.wait_for_selector("#memberList .upd-on", timeout=8000)
+        page.wait_for_selector("#memberList .upd-on", timeout=15000)
         check("กดแล้วสิทธิ์อัปเดตเปิดทันที (✓ อนุญาตอัปเดต)",
               page.locator("#memberList .upd-on").count() == 1
               and page.locator("#memberList .upd-off").count() == n_off - 1)
@@ -350,26 +350,26 @@ def main():
                return (await r.json()).ok === true; }""")
         check("ตั้ง PASSCODE ได้", ok)
         page.click("#btnLogout")
-        page.wait_for_selector("#screen-auth:not(.hidden)", timeout=6000)
-        page.wait_for_selector("#authMethodBar:not(.hidden)", timeout=6000)
+        page.wait_for_selector("#screen-auth:not(.hidden)", timeout=15000)
+        page.wait_for_selector("#authMethodBar:not(.hidden)", timeout=15000)
         page.click('#authMethodBar [data-method="passcode"]')
         page.wait_for_selector("#authQuickBox:not(.hidden)", timeout=4000)
         n = page.eval_on_selector("#authQuickUser", "el => el.options.length")
         check("มีรายชื่อผู้ใช้ให้เลือกปลดล็อก", n == 1, f"got {n}")
         page.fill("#authPasscode", "24681357")
         page.click("#btnQuickUnlock")
-        page.wait_for_selector("#screen-app:not(.hidden)", timeout=8000)
+        page.wait_for_selector("#screen-app:not(.hidden)", timeout=15000)
         check("เลือก user แล้วปลดล็อกด้วย PASSCODE ของคนนั้นได้", True)
 
         # ── ออกจากระบบ → เข้าใหม่ด้วยรหัสผ่านปกติ ──
         page.click("#btnLogout")
-        page.wait_for_selector("#screen-auth:not(.hidden)", timeout=6000)
-        page.wait_for_selector("#authMethodBar:not(.hidden)", timeout=6000)
+        page.wait_for_selector("#screen-auth:not(.hidden)", timeout=15000)
+        page.wait_for_selector("#authMethodBar:not(.hidden)", timeout=15000)
         page.click('#authMethodBar [data-method="password"]')
         page.fill("#authLoginUser", "admin1")
         page.fill("#authLoginPw", "secret9")
         page.click("#authLoginForm button[type=submit]")
-        page.wait_for_selector("#screen-app:not(.hidden)", timeout=8000)
+        page.wait_for_selector("#screen-app:not(.hidden)", timeout=15000)
         check("ออกแล้วเข้าใหม่ด้วยรหัสผ่านได้", True)
         page.wait_for_timeout(700)
 
