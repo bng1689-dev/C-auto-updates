@@ -143,11 +143,22 @@ def main():
 
         # ── v3.6.1: เวลาที่เหลือต้องเริ่มนับใหม่หลังพัก — ช่วงที่พักไม่ถูกนับเป็นเวลาค้น ──
         # เดิมจุดตั้งต้นค้างไว้ข้ามช่วงพัก → กดค้นต่อแล้วอัตราแถว/นาทีต่ำเกินจริง เวลาที่เหลือพุ่งเกินจริง
+        def eta_text(timeout=15000):
+            """รอจนชิปเวลาที่เหลือโผล่ — ต้องผ่าน ≥5 วิจากจุดตั้งต้น 'และ' ตรงจังหวะ poll (1.2 วิ) จึงห้ามรอเวลาตายตัว
+            (เดิมรอ 5.5 วิแล้วอ่านทันที: poll ครั้งสุดท้ายก่อนอ่านอาจตกที่ 4.8 วิ → ยังซ่อน → ตกแบบสุ่มเมื่อเครื่องช้า)"""
+            try:
+                page.wait_for_function(
+                    "() => { const el = document.querySelector('#rbEta');"
+                    " return !!el && !el.classList.contains('hidden') && el.textContent.includes('แถว/นาที'); }",
+                    timeout=timeout)
+            except Exception:
+                pass
+            return page.eval_on_selector("#rbEta", "el => el.classList.contains('hidden') ? '' : el.textContent")
+
         STATE.update(state="running", step_mode=False, awaiting_step=False, file_done=10)
         page.wait_for_timeout(1600)                       # จุดตั้งต้นของอัตรา = 10 แถว
-        STATE.update(file_done=14)
-        page.wait_for_timeout(5500)                       # +4 แถวใน >5 วิ → มีค่า ETA ให้โชว์
-        eta = page.eval_on_selector("#rbEta", "el => el.classList.contains('hidden') ? '' : el.textContent")
+        STATE.update(file_done=14)                        # +4 แถว → พอครบ 5 วิจากจุดตั้งต้น มีค่า ETA ให้โชว์
+        eta = eta_text()
         check("กำลังค้น: ชิปเวลาที่เหลือโผล่พร้อมอัตราแถว/นาที", "แถว/นาที" in eta, eta)
         STATE.update(state="paused")
         page.wait_for_timeout(1600)
@@ -156,8 +167,7 @@ def main():
         check("ค้นต่อหลังพัก: ชิปเวลาที่เหลือซ่อนจนกว่าจะมีอัตราใหม่ (ไม่เอาช่วงพักมาคิด)",
               page.eval_on_selector("#rbEta", "el => el.classList.contains('hidden')"))
         STATE.update(file_done=17)
-        page.wait_for_timeout(5500)
-        eta = page.eval_on_selector("#rbEta", "el => el.classList.contains('hidden') ? '' : el.textContent")
+        eta = eta_text()
         check("ค้นต่อไปอีก 3 แถว → เวลาที่เหลือกลับมาโชว์จากอัตราใหม่", "แถว/นาที" in eta, eta)
 
         # ── ไม่มีคิวเลย + ไม่มีรอบทำงาน → แถวคู่ต้องซ่อนหมด ไม่เหลือช่องว่าง ──
