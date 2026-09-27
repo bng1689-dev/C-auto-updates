@@ -238,6 +238,10 @@ def main():
         check("แถว ERROR ถูกย้อนกลับไปค้นใหม่ในรอบลองใหม่", "รอบลองใหม่ที่ 1" in log, log[-600:])
         check("ไม่มีแถวผิดพลาดค้าง", s["errors_left"] == 0, str(s["errors_left"]))
         check("แถบความคืบหน้า 100%", s["percent"] == 100, str(s["percent"]))
+        # v3.6.4: ชื่อบัญชีที่ worker 'อ่านจากหน้าเว็บ CRIMES' หลังเข้าระบบ ถูกจดไว้ให้ใช้ยืนยันตัวตนตอนลืมรหัสผ่าน
+        known = server.db.crimes_accounts_for_user(server.manager.current_user_id)
+        check("v3.6.4 จดชื่อบัญชี CRIMES ที่อ่านจากหน้าเว็บไว้ (ยืนยันตัวตนตอนลืมรหัสผ่าน)",
+              known == ["ร.ต.อ.ทดสอบ ระบบ"], str(known))
         hits = dict(S["hits"])
         check("ส่งเลข 12 หลักไปค้นเป็น 13 หลักที่มี 0 ข้างหน้า", hits.get("0123456789012") == 1, str(hits))
         check("ไม่เคยค้นเลขผิด (ศูนย์ต่อท้าย) จากเซลล์ทศนิยม",

@@ -379,7 +379,7 @@ def main():
 
         # ── v3.6.4: ลืมรหัสผ่าน (สมาชิก) — ยืนยันด้วยชื่อที่ใช้เข้าเว็บ CRIMES ที่โปรแกรมจดไว้จากรอบค้น ──
         m9 = next(u for u in db.list_users() if u["username"] == "member9")
-        db.start_run("Somchai.C", 1, user_id=m9["id"])
+        db.remember_crimes_account(m9["id"], "Somchai.C")     # ชื่อที่ worker อ่านจากหน้าเว็บ CRIMES ตอนคนนี้ค้น
         page.click("#btnLogout")
         page.wait_for_selector("#screen-auth:not(.hidden)", timeout=15000)
         page.wait_for_selector("#authForgotLink:not(.hidden)", timeout=15000)
