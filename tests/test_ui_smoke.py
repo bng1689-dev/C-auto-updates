@@ -377,13 +377,58 @@ def main():
         check("ออกแล้วเข้าใหม่ด้วยรหัสผ่านได้", True)
         page.wait_for_timeout(700)
 
+        # ── v3.6.3: กู้รหัสผ่าน Super Admin ด้วยไฟล์บนเครื่อง (ผู้ใช้รายงาน 'Super Admin รหัสผิด' หลังอัปเดต) ──
+        page.click("#btnLogout")
+        page.wait_for_selector("#screen-auth:not(.hidden)", timeout=15000)
+        page.wait_for_selector("#authForgotLink:not(.hidden)", timeout=15000)
+        check("หน้าเข้าสู่ระบบมีลิงก์ 'ลืมรหัสผ่าน Super Admin?' (เปิดจากเครื่องนี้)", True)
+        check("(ก่อนมีไฟล์) ไม่มีกล่องกู้รหัส",
+              page.eval_on_selector("#authRecoverBox", "el => el.classList.contains('hidden')"))
+        page.click("#authForgotLink")
+        page.wait_for_selector("#authForgotHint:not(.hidden)", timeout=5000)
+        hint = page.text_content("#authRecoverPath") or ""
+        check("คำแนะนำบอกตำแหน่งไฟล์จริงของเครื่องนี้", str(server.RECOVERY_FILE) in hint, hint)
+        server.RECOVERY_FILE.write_text("", encoding="utf-8")
+        page.reload(wait_until="domcontentloaded")
+        page.wait_for_selector("#authRecoverBox:not(.hidden)", timeout=15000)
+        check("วางไฟล์แล้วรีเฟรช → กล่องกู้รหัสโผล่ ช่องเข้าสู่ระบบ/PASSCODE ซ่อน",
+              page.eval_on_selector("#authLoginBox", "el => el.classList.contains('hidden')")
+              and page.eval_on_selector("#authQuickBox", "el => el.classList.contains('hidden')"))
+        n = page.eval_on_selector("#authRecoverUser", "el => el.options.length")
+        check("รายชื่อมีเฉพาะ Super Admin (1 คน)", n == 1, f"got {n}")
+        page.fill("#authRecoverPw", "recover99")
+        page.fill("#authRecoverPw2", "recover98")
+        page.click("#btnRecoverSubmit")
+        page.wait_for_function(
+            "document.getElementById('authRecoverErr').textContent.includes('ไม่ตรงกัน')", timeout=8000)
+        check("สองช่องไม่ตรง → แจ้งบนหน้า ไม่หลุดออก", True)
+        page.fill("#authRecoverPw2", "recover99")
+        page.click("#btnRecoverSubmit")
+        page.wait_for_selector("#screen-app:not(.hidden)", timeout=15000)
+        check("ตั้งรหัสใหม่แล้วเข้าสู่ระบบให้ทันที", True)
+        check("ไฟล์กู้ถูกลบ", not server.RECOVERY_FILE.exists())
+        page.wait_for_timeout(700)
+        page.click("#btnLogout")
+        page.wait_for_selector("#screen-auth:not(.hidden)", timeout=15000)
+        page.wait_for_selector("#authLoginBox:not(.hidden)", timeout=15000)
+        check("PASSCODE ของบัญชีถูกยกเลิก → หน้าเข้าสู่ระบบเหลือแต่รหัสผ่าน",
+              page.eval_on_selector("#authMethodBar", "el => el.classList.contains('hidden')"))
+        page.fill("#authLoginUser", "admin1")
+        page.fill("#authLoginPw", "recover99")
+        page.click("#authLoginForm button[type=submit]")
+        page.wait_for_selector("#screen-app:not(.hidden)", timeout=15000)
+        check("เข้าด้วยรหัสใหม่ได้", True)
+        page.wait_for_timeout(500)
+
         browser.close()
 
     # 401 จาก /api/me ตอนยังไม่ล็อกอิน = การเช็คสถานะปกติ (เบราว์เซอร์ log เป็น
     # resource error) — ไม่ใช่ข้อผิดพลาดของสคริปต์ · pageerror ทุกตัวยังนับเต็ม
-    real_errors = [e for e in JS_ERRORS
-                   if "favicon" not in e
-                   and not ("Failed to load resource" in e and "401" in e)]
+    # คำตอบ 4xx ที่ตั้งใจ (401 ยังไม่ล็อกอิน · 400 รหัสสองช่องไม่ตรงในขั้นกู้รหัส · 403 ไม่มีไฟล์กู้) ถูกเบราว์เซอร์
+    # log เป็น resource error — ไม่ใช่ข้อผิดพลาดของสคริปต์ · pageerror ทุกตัวยังนับเต็ม
+    def _expected_4xx(e):
+        return "Failed to load resource" in e and any(f"status of {c}" in e for c in (400, 401, 403, 409, 429))
+    real_errors = [e for e in JS_ERRORS if "favicon" not in e and not _expected_4xx(e)]
     check("ไม่มี JavaScript error แม้แต่จุดเดียว", not real_errors,
           "\n    ".join(real_errors[:8]))
 
