@@ -8,6 +8,8 @@
 | `release.py` | ปล่อยรุ่น: `extract` แตกแพ็กเกจลง `build/` · `build` สร้าง zip + manifest + รายการ CHANGELOG · `verify` ตรวจของที่ขึ้นออนไลน์ — ขั้นตอนเต็มอยู่ใน [README หลัก](../README.md#ปล่อยรุ่นใหม่) |
 | `changelog.py` | สร้าง `CHANGELOG.md` ใหม่ทั้งไฟล์จากประวัติ `update-manifest.json` ใน git |
 | `hub_gas.js` | สคริปต์ศูนย์กลางรวมตัวเลข (Google Apps Script) — ด้านล่าง |
+| `build_installer.py` | สร้าง **ชุดติดตั้งตัวเต็ม** (Python runtime + Chromium + โปรแกรมรุ่นล่าสุด + ตัวติดตั้ง/ถอน) ลง `dist/` — รหัสเริ่มติดตั้งและรหัสบัญชีเริ่มต้นให้ทาง env `CRIMES_INSTALL_PASSWORD` / `CRIMES_SEED_PASSWORD` เท่านั้น (เก็บเป็นแฮช) · รายละเอียดใน [README หลัก](../README.md#ชุดติดตั้งตัวเต็ม-ตั้งแต่-v380) |
+| `installer/` | ต้นฉบับที่ `build_installer.py` ใส่ลงชุด: `Install.ps1` `Uninstall.ps1` `ติดตั้ง.bat` `ถอนการติดตั้ง.bat` `README-ติดตั้ง.txt` และ `versions.json` (รุ่น Python/Playwright · ชื่อบัญชีเริ่มต้น) — ไฟล์เหล่านี้ไปกับชุดติดตั้ง แต่ไม่ไปกับชุดอัปเดต |
 
 > `keygen.py` (ระบบ KEY อนุญาตอัปเดต v2.8.0–v3.0.0) ถูกลบออกแล้ว เพราะระบบ KEY ถูกยกเลิกตั้งแต่ v3.1.0
 > ปัจจุบันคุมสิทธิ์อัปเดตที่ **สมาชิก & ทีม → ปุ่มสิทธิ์อัปเดตในแถวของแต่ละคน** — ถ้าจำเป็นต้องดูโค้ดเก่า อยู่ในประวัติ git

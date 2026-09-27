@@ -101,9 +101,17 @@ def cmd_build(args):
     # ในรีโป (git add -A กวาดขึ้นไปได้) และขวางการ build ครั้งถัดไปจนกว่าจะลบเอง
     part = out_zip.with_name(out_zip.name + ".part")
 
+    # v3.8.0: --remove ตัดไฟล์ที่เลิกใช้ออกจากแพ็กเกจ (และลบสำเนาใน build/ เพื่อไม่ให้รอบหน้าเห็นเป็น 'ไฟล์ใหม่')
+    removed = [f"{PKG}/" + r.strip().replace("\\", "/").lstrip("/") for r in (getattr(args, "remove", None) or [])]
     changed, added = [], []
     with zipfile.ZipFile(prev_zip) as zin:
         names = [i.filename for i in zin.infolist()]
+        missing_rm = [r for r in removed if r not in names]
+        if missing_rm:
+            sys.exit("ไฟล์ที่สั่ง --remove ไม่มีในแพ็กเกจรุ่นก่อน: " + ", ".join(missing_rm))
+        for r in removed:
+            (ROOT / "build" / r).unlink(missing_ok=True)
+        names = [n for n in names if n not in removed]
         # ไฟล์ใหม่ใน build/ ที่ไม่มีในแพ็กเกจรุ่นก่อน — ต้องตั้งใจเพิ่มเท่านั้น (--allow-new-files)
         extra_local = sorted(
             p.relative_to(ROOT / "build").as_posix() for p in tree.rglob("*")
@@ -114,6 +122,9 @@ def cmd_build(args):
                      + "\n   ถ้าตั้งใจเพิ่มไฟล์ใหม่จริง ใช้ --allow-new-files (จะถูกใส่ลง zip และตรวจเหมือนไฟล์อื่น)")
         with zipfile.ZipFile(part, "w", zipfile.ZIP_DEFLATED) as zout:
             for info in zin.infolist():
+                if info.filename in removed:
+                    print(f"  - ตัดไฟล์ออก {info.filename}")
+                    continue
                 data = zin.read(info.filename)
                 if not info.is_dir():
                     local = ROOT / "build" / info.filename
@@ -164,6 +175,8 @@ def cmd_build(args):
     print(f"  ไฟล์ที่เปลี่ยนจาก v{cur}: " + ", ".join(n.split("/", 1)[1] for n in changed))
     if added:
         print("  ไฟล์ใหม่ที่เพิ่มเข้าแพ็กเกจ: " + ", ".join(n.split("/", 1)[1] for n in added))
+    if removed:
+        print("  ไฟล์ที่ตัดออกจากแพ็กเกจ: " + ", ".join(n.split("/", 1)[1] for n in removed))
     print(f"  manifest: v{new} · open={bool(args.open)}")
     print("ถัดไป: python tests/run_all.py --quick → git add -A → commit → push → PR → merge → release.py verify")
 
@@ -204,6 +217,8 @@ def main():
     b.add_argument("--open", action="store_true", help="เปิดให้ทุกเครื่องอัปเดตรุ่นนี้โดยไม่ต้องได้รับสิทธิ์")
     b.add_argument("--overwrite", action="store_true")
     b.add_argument("--allow-new-files", action="store_true")
+    b.add_argument("--remove", action="append", default=[], metavar="PATH",
+                   help="ตัดไฟล์ที่เลิกใช้ออกจากแพ็กเกจ (path ใต้ CRIMES_AUTO_update/ เช่น app/backend/licensekey.py) ระบุซ้ำได้")
     sub.add_parser("verify", help="ดาวน์โหลด manifest+zip จาก GitHub มาตรวจ sha256")
     args = ap.parse_args()
     return {"extract": cmd_extract, "build": cmd_build, "verify": cmd_verify}[args.cmd](args) or 0

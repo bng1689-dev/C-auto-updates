@@ -1,0 +1,44 @@
+name: installer
+
+# สร้างชุดติดตั้งตัวเต็ม (Python runtime + Chromium + โปรแกรมรุ่นล่าสุดตาม update-manifest.json) แบบกดสั่งเอง
+# รหัสเริ่มติดตั้ง/รหัสบัญชีเริ่มต้นมาจาก repository secrets เท่านั้น (Settings → Secrets → Actions):
+#   INSTALLER_GATE_PASSWORD · INSTALLER_SEED_PASSWORD
+# ผลลัพธ์เป็น artifact ของ run นี้ (เก็บ 7 วัน) — รีโปนี้เป็นสาธารณะ: ใครที่ล็อกอิน GitHub ก็ดาวน์โหลด artifact ได้
+# จึงควรใช้เฉพาะเมื่อจำเป็น และตั้งรหัสให้เดายาก · ทางเลือกที่ปิดกว่า: รัน tools/build_installer.py บนเครื่องผู้ดูแลเอง
+on:
+  workflow_dispatch:
+    inputs:
+      note:
+        description: "บันทึกประกอบ (ไม่บังคับ)"
+        required: false
+        default: ""
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: ติดตั้ง Playwright รุ่นเดียวกับที่ชุดติดตั้งใช้ (tools/installer/versions.json)
+        shell: bash
+        run: pip install "playwright==$(python -c "import json;print(json.load(open('tools/installer/versions.json'))['playwright'])")"
+      - name: สร้างชุดติดตั้ง
+        shell: bash
+        env:
+          CRIMES_INSTALL_PASSWORD: ${{ secrets.INSTALLER_GATE_PASSWORD }}
+          CRIMES_SEED_PASSWORD: ${{ secrets.INSTALLER_SEED_PASSWORD }}
+        run: |
+          if [ -z "$CRIMES_INSTALL_PASSWORD" ] || [ -z "$CRIMES_SEED_PASSWORD" ]; then
+            echo "ต้องตั้ง secrets INSTALLER_GATE_PASSWORD และ INSTALLER_SEED_PASSWORD ก่อน"; exit 1; fi
+          python tools/build_installer.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: CRIMES_AUTO_Setup
+          path: |
+            dist/*.zip
+            dist/*.sha256
+          retention-days: 7
+          if-no-files-found: error

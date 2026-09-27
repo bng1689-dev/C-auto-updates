@@ -9,3 +9,6 @@ __pycache__/
 *.pyc
 *.tmp
 .pytest_cache/
+
+# ชุดติดตั้งตัวเต็มที่สร้างโดย tools/build_installer.py (ใหญ่หลายร้อย MB และมีแฮชรหัสเริ่มติดตั้ง — ไม่ขึ้น git)
+dist/

@@ -1,0 +1,9 @@
+{
+  "_comment": "รุ่นที่ชุดติดตั้งตัวเต็มใช้ — tools/build_installer.py อ่านไฟล์นี้ · playwright ต้องตรงกับที่ติดตั้งในเครื่องที่ build (ใช้ตัวมันดาวน์โหลด Chromium สำหรับ Windows)",
+  "python": "3.11.9",
+  "playwright": "1.62.0",
+  "seed_username": "Superadmin",
+  "seed_display_name": "Super Admin",
+  "gate_iterations": 120000,
+  "pure_sdists": ["proxy_tools"]
+}
