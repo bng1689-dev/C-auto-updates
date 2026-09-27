@@ -126,8 +126,13 @@ def main():
     res = build("1.0.2", allow=True)
     check("ไฟล์ผู้ดูแลหลุดเข้า build/ → ด่านตรวจไม่ให้ผ่านแม้สั่ง --allow-new-files",
           res.startswith("assert") and "ต้องห้าม" in res, res)
+    # ต้องไม่ทิ้ง zip ที่มีไฟล์ลับไว้ในรีโป (git add -A จะกวาดขึ้นไป) และไม่ทิ้งไฟล์ชั่วคราว
+    leftovers = [p.name for p in TMP.iterdir() if p.name.endswith(".zip") or p.name.endswith(".part")]
+    check("build ที่ไม่ผ่านด่านตรวจ ไม่ทิ้ง zip/ไฟล์ชั่วคราวไว้",
+          f"{PKG}_v1.0.2.zip" not in leftovers and not any(n.endswith(".part") for n in leftovers), str(leftovers))
     bad.unlink()
-    (TMP / f"{PKG}_v1.0.2.zip").unlink(missing_ok=True)
+    check("manifest ยังชี้รุ่นเดิม (1.0.1) เมื่อ build ไม่ผ่าน",
+          json.loads((TMP / "update-manifest.json").read_text(encoding="utf-8"))["version"] == "1.0.1")
 
     print("\n── verify: เทียบของออนไลน์จริง ──")
     mf = json.loads((TMP / "update-manifest.json").read_text(encoding="utf-8"))

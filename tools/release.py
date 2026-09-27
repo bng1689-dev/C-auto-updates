@@ -54,6 +54,28 @@ def cmd_extract(args):
     pkg_extract(force=args.force)
 
 
+def _validate_package(path, expected_names, new):
+    """ด่านตรวจแพ็กเกจ — คืนรายการไฟล์ใน zip · โยน AssertionError/SyntaxError เมื่อไม่ผ่าน"""
+    with zipfile.ZipFile(path) as z:
+        got = [i.filename for i in z.infolist()]
+        assert got == expected_names, "รายการไฟล์ไม่ตรงกับรุ่นก่อน (+ไฟล์ใหม่ที่อนุญาต)"
+        bad = [n for n in got for f in FORBIDDEN if f in n]
+        assert not bad, f"มีไฟล์ต้องห้ามในแพ็กเกจ: {bad}"
+        assert z.read(f"{PKG}/app/VERSION").decode().strip() == new
+        html = z.read(f"{PKG}/app/frontend/index.html").decode("utf-8")
+        eng = z.read(f"{PKG}/app/backend/engine.py").decode("utf-8")
+        wk = z.read(f"{PKG}/app/backend/worker.py").decode("utf-8")
+        srv = z.read(f"{PKG}/app/backend/server.py").decode("utf-8")
+        for group, text, label in ((CORE_HTML, html, "index.html"), (CORE_ENGINE, eng, "engine.py"),
+                                   (CORE_WORKER, wk, "worker.py"), (CORE_SERVER, srv, "server.py")):
+            missing = [fn for fn in group if fn not in text]
+            assert not missing, f"{label} ขาดฟังก์ชันแกน: {missing}"
+        for n in got:
+            if n.endswith(".py"):
+                compile(z.read(n).decode("utf-8"), n, "exec")
+    return got
+
+
 def cmd_build(args):
     mf = load_manifest()
     cur = str(mf.get("version", "0"))
@@ -74,6 +96,10 @@ def cmd_build(args):
     out_zip = ROOT / f"{PKG}_v{new}.zip"
     if out_zip.exists() and not args.overwrite:
         sys.exit(f"{out_zip.name} มีอยู่แล้ว (ใช้ --overwrite ถ้าตั้งใจสร้างทับ)")
+    # v3.6.1: เขียนลงไฟล์ชั่วคราวก่อน ผ่านด่านตรวจครบแล้วค่อยเปลี่ยนชื่อเป็น zip จริง — เดิมไฟล์ต้องห้าม
+    # (เช่น hub_gas.js) ที่หลุดเข้า build/ ถูกเขียนลง zip ชื่อจริงก่อนด่านตรวจจะปฏิเสธ แล้ว zip นั้นค้างอยู่
+    # ในรีโป (git add -A กวาดขึ้นไปได้) และขวางการ build ครั้งถัดไปจนกว่าจะลบเอง
+    part = out_zip.with_name(out_zip.name + ".part")
 
     changed, added = [], []
     with zipfile.ZipFile(prev_zip) as zin:
@@ -86,7 +112,7 @@ def cmd_build(args):
         if extra_local and not args.allow_new_files:
             sys.exit("ไฟล์ใหม่ใน build/ ที่ไม่ได้อยู่ในแพ็กเกจรุ่นก่อน: " + ", ".join(extra_local)
                      + "\n   ถ้าตั้งใจเพิ่มไฟล์ใหม่จริง ใช้ --allow-new-files (จะถูกใส่ลง zip และตรวจเหมือนไฟล์อื่น)")
-        with zipfile.ZipFile(out_zip, "w", zipfile.ZIP_DEFLATED) as zout:
+        with zipfile.ZipFile(part, "w", zipfile.ZIP_DEFLATED) as zout:
             for info in zin.infolist():
                 data = zin.read(info.filename)
                 if not info.is_dir():
@@ -105,28 +131,15 @@ def cmd_build(args):
                 zout.write(ROOT / "build" / rel, arcname=rel)
                 added.append(rel)
                 print(f"  + เพิ่มไฟล์ใหม่ {rel}")
-    if f"{PKG}/app/VERSION" not in changed:
-        out_zip.unlink(missing_ok=True)
-        sys.exit("VERSION ไม่เปลี่ยน — ผิดปกติ")
-
-    # ---- ด่านตรวจแพ็กเกจ ----
-    with zipfile.ZipFile(out_zip) as z:
-        got = [i.filename for i in z.infolist()]
-        assert got == names + added, "รายการไฟล์ไม่ตรงกับรุ่นก่อน (+ไฟล์ใหม่ที่อนุญาต)"
-        bad = [n for n in got for f in FORBIDDEN if f in n]
-        assert not bad, f"มีไฟล์ต้องห้ามในแพ็กเกจ: {bad}"
-        assert z.read(f"{PKG}/app/VERSION").decode().strip() == new
-        html = z.read(f"{PKG}/app/frontend/index.html").decode("utf-8")
-        eng = z.read(f"{PKG}/app/backend/engine.py").decode("utf-8")
-        wk = z.read(f"{PKG}/app/backend/worker.py").decode("utf-8")
-        srv = z.read(f"{PKG}/app/backend/server.py").decode("utf-8")
-        for group, text, label in ((CORE_HTML, html, "index.html"), (CORE_ENGINE, eng, "engine.py"),
-                                   (CORE_WORKER, wk, "worker.py"), (CORE_SERVER, srv, "server.py")):
-            missing = [fn for fn in group if fn not in text]
-            assert not missing, f"{label} ขาดฟังก์ชันแกน: {missing}"
-        for n in got:
-            if n.endswith(".py"):
-                compile(z.read(n).decode("utf-8"), n, "exec")
+    # ---- ด่านตรวจแพ็กเกจ (บนไฟล์ชั่วคราว) — ไม่ผ่านข้อไหน ไฟล์ชั่วคราวถูกลบ ไม่มี zip ค้าง ----
+    try:
+        if f"{PKG}/app/VERSION" not in changed:
+            sys.exit("VERSION ไม่เปลี่ยน — ผิดปกติ")
+        got = _validate_package(part, names + added, new)
+    except BaseException:
+        part.unlink(missing_ok=True)
+        raise
+    part.replace(out_zip)
 
     digest = sha256(out_zip)
     notes = args.notes.strip() if args.notes else f"เวอร์ชัน {new}"
