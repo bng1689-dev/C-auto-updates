@@ -110,8 +110,9 @@ CRIMES_INSTALL_PASSWORD='…' CRIMES_SEED_PASSWORD='…' python tools/build_inst
   แล้วลบไฟล์ทิ้งทันที (มีผู้ใช้อยู่แล้ว/ไฟล์เสียก็ลบ) · `/api/me` บอก `seed_password` และหน้าจอขึ้นป้ายเตือน "เปลี่ยนรหัสผ่านเดี๋ยวนี้"
   ทุกครั้งที่เข้า จนกว่าจะเปลี่ยน (ทางไหนก็ได้ — ป้ายเทียบแฮชกับที่จดใน `meta`)
 - **ถอนการติดตั้ง** (Start Menu / Settings → Apps / `ถอนการติดตั้ง.bat`): ปิดโปรเซส → ถามยืนยัน `YES` → เสนอสำรองข้อมูลไว้ที่เดสก์ท็อป →
-  ลบโฟลเดอร์ติดตั้งทั้งหมด (รวมฐานข้อมูล) · ทางลัด · คีย์รีจิสทรี `HKCU\…\Uninstall\CRIMES-AUTO` · `~\.crimes_auto_profile` ·
-  `%TEMP%\crimes_upd_*` · แคช WebView2 (`%LOCALAPPDATA%\pywebview`) · การติดตั้งแบบเก่าที่ `C:\Crimes-Automate` (ถ้าพบและยืนยัน)
+  ลบโฟลเดอร์ติดตั้งทั้งหมด (รวมฐานข้อมูลและแคช WebView2 `webview-data` ที่ v3.8.0 ย้ายมาไว้ในนั้น — ไม่แตะ `%LOCALAPPDATA%\pywebview`
+  ที่โปรแกรม pywebview อื่นอาจใช้ร่วม) · ทางลัด · คีย์รีจิสทรี `HKCU\…\Uninstall\CRIMES-AUTO` · `~\.crimes_auto_profile` ·
+  `%TEMP%\crimes_upd_*` · การติดตั้งแบบเก่าที่ `C:\Crimes-Automate` (ถ้าพบและยืนยัน) · สำรองไม่สำเร็จ = ยกเลิกทั้งหมด ไม่ลบอะไร
 - **สร้างอัตโนมัติบน GitHub**: workflow `installer` (Actions → Run workflow) บน `windows-latest` ใช้ secrets
   `INSTALLER_GATE_PASSWORD` / `INSTALLER_SEED_PASSWORD` แล้วอัปโหลด zip เป็น artifact (7 วัน)
   ⚠ รีโปนี้เป็นสาธารณะ — ใครที่ล็อกอิน GitHub ก็ดาวน์โหลด artifact ได้ และแฮชของรหัสสั้น ๆ เดาออฟไลน์ได้

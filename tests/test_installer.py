@@ -21,6 +21,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "tools"))
 import build_installer as bi  # noqa: E402
+import pkg  # noqa: E402
 
 TMP = Path(tempfile.mkdtemp(prefix="crimes_installer_"))
 PKG = bi.PKG
@@ -222,7 +223,12 @@ def main():
           all(k in (bi.TPL / "Install.ps1").read_text(encoding="utf-8-sig") for k in
               ("Rfc2898DeriveBytes", "OBSOLETE.txt", "Uninstall\\CRIMES-AUTO", "seed_account.json", "/MIR", "runtime-ok", "-Silent"))
           and all(k in (bi.TPL / "Uninstall.ps1").read_text(encoding="utf-8-sig") for k in
-                  (".crimes_auto_profile", "crimes_upd_", "Uninstall\\CRIMES-AUTO", "Remove-Tree $Install", "KeepData")))
+                  (".crimes_auto_profile", "crimes_upd_", "Uninstall\\CRIMES-AUTO", "Remove-Tree $Install", "KeepData",
+                   "$backupOk", "Finish 1")))
+    un = (bi.TPL / "Uninstall.ps1").read_text(encoding="utf-8-sig")
+    check("ตัวถอน: สำรองไม่สำเร็จต้องหยุดก่อนลบ (ตรวจ robocopy code + data.db) · ไม่ลบที่เก็บกลาง %LOCALAPPDATA%\\pywebview ของโปรแกรมอื่น",
+          un.index("$backupOk") < un.index("Remove-Tree $Install") and 'Remove-Tree (Join-Path $env:LOCALAPPDATA "pywebview")' not in un
+          and "storage_path" in zipfile.ZipFile(pkg.latest_zip()[0]).read(f"{PKG}/app/desktop.py").decode("utf-8"))
     check("workflow สร้างชุดติดตั้งใช้ secrets ไม่ใช่ค่าคงที่", "secrets.INSTALLER_GATE_PASSWORD" in (ROOT / ".github" / "workflows" / "installer.yml").read_text(encoding="utf-8"))
     check("dist/ อยู่ใน .gitignore", "dist/" in (ROOT / ".gitignore").read_text(encoding="utf-8"))
 

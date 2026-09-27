@@ -1,9 +1,9 @@
 <#
   Uninstall.ps1 — ถอนการติดตั้ง CRIMES AUTO แบบถอนรากถอนโคน
-  ลบ: โปรแกรม · Python runtime · Chromium · ฐานข้อมูล/บัญชี/ประวัติ/ไฟล์อัปโหลด · ทางลัด · รายการใน Add/Remove Programs
-       · โปรไฟล์ Chrome ของโปรแกรม (%USERPROFILE%\.crimes_auto_profile) · ไฟล์ชั่วคราวจากการอัปเดต · แคชหน้าต่างโปรแกรม (WebView2)
+  ลบ: โปรแกรม · Python runtime · Chromium · ฐานข้อมูล/บัญชี/ประวัติ/ไฟล์อัปโหลด · แคชหน้าต่างโปรแกรม (webview-data ในโฟลเดอร์ติดตั้ง)
+       · ทางลัด · รายการใน Add/Remove Programs · โปรไฟล์ Chrome ของโปรแกรม (%USERPROFILE%\.crimes_auto_profile) · ไฟล์ชั่วคราวจากการอัปเดต
   -Silent   = ไม่ถามยืนยัน (ใช้จาก Add/Remove Programs แบบเงียบ)
-  -KeepData = สำรองฐานข้อมูล/ไฟล์อัปโหลดไว้ที่เดสก์ท็อปก่อนลบ
+  -KeepData = สำรองฐานข้อมูล/ไฟล์อัปโหลดไว้ที่เดสก์ท็อปก่อนลบ — สำรองไม่สำเร็จ = ยกเลิกทั้งหมด ไม่ลบอะไร
 
   สร้างโดย tools/build_installer.py — แก้ต้นฉบับที่ tools/installer/Uninstall.ps1 เท่านั้น
 #>
@@ -48,15 +48,29 @@ try {
 } catch {}
 Start-Sleep -Milliseconds 1500
 
-# ---- สำรองข้อมูล (ถ้าขอ) ----
+# ---- สำรองข้อมูล (ถ้าขอ) — สำรองไม่สำเร็จ = หยุดทันที ห้ามลบอะไรทั้งสิ้น (ดิสก์เต็ม/สิทธิ์ไม่พอ ไม่ใช่เหตุให้ข้อมูลหาย) ----
 if ($KeepData) {
     $stamp = Get-Date -Format "yyyyMMdd-HHmmss"
     $dst = Join-Path ([Environment]::GetFolderPath("Desktop")) ("CRIMES-AUTO-backup-" + $stamp)
+    $backupOk = $true
     foreach ($sub in @("app\backend\data", "app\backend\uploads")) {
         $src = Join-Path $Install $sub
-        if (Test-Path $src) { robocopy $src (Join-Path $dst (Split-Path $sub -Leaf)) /E /NFL /NDL /NJH /NJS /NP > $null }
+        if (-not (Test-Path $src)) { continue }
+        $to = Join-Path $dst (Split-Path $sub -Leaf)
+        robocopy $src $to /E /R:2 /W:2 /NFL /NDL /NJH /NJS /NP > $null
+        $rc = $LASTEXITCODE
+        if ($rc -ge 8) { Write-Host "  ! สำรอง $sub ไม่สำเร็จ (robocopy code $rc)" -ForegroundColor Red; $backupOk = $false }
     }
-    if (Test-Path $dst) { Write-Host "  - สำรองข้อมูลไว้ที่: $dst" }
+    $dbSrc = Join-Path $Install "app\backend\data\data.db"
+    $dbDst = Join-Path $dst "data\data.db"
+    if ((Test-Path $dbSrc) -and (-not (Test-Path $dbDst) -or ((Get-Item $dbSrc).Length -ne (Get-Item $dbDst).Length))) {
+        Write-Host "  ! สำเนา data.db ไม่ครบ" -ForegroundColor Red; $backupOk = $false
+    }
+    if (-not $backupOk) {
+        Write-Host "[X] สำรองข้อมูลไม่สำเร็จ — ยกเลิกการถอนการติดตั้ง ไม่มีอะไรถูกลบ (ตรวจพื้นที่ดิสก์/สิทธิ์ที่เดสก์ท็อป แล้วลองใหม่)" -ForegroundColor Red
+        Finish 1
+    }
+    Write-Host "  - สำรองข้อมูลไว้ที่: $dst"
 }
 
 # ---- ทางลัด + รายการใน Add/Remove Programs ----
@@ -80,9 +94,10 @@ function Remove-Tree($p) {
     }
     Write-Host "  ! ลบไม่หมด: $p (ปิดโปรแกรมที่ค้างอยู่ แล้วลบโฟลเดอร์นี้เองได้)" -ForegroundColor Yellow
 }
+# แคชหน้าต่างโปรแกรม (WebView2) อยู่ที่ $Install\webview-data ตั้งแต่ v3.8.0 — หายไปพร้อมโฟลเดอร์ติดตั้ง
+# (ไม่แตะ %LOCALAPPDATA%\pywebview ซึ่งเป็นที่เก็บกลางที่โปรแกรม pywebview อื่นบนเครื่องอาจใช้ร่วมกัน)
 Remove-Tree $Install
 Remove-Tree (Join-Path $env:USERPROFILE ".crimes_auto_profile")
-Remove-Tree (Join-Path $env:LOCALAPPDATA "pywebview")
 Get-ChildItem $env:TEMP -Directory -Filter "crimes_upd_*" -ErrorAction SilentlyContinue | ForEach-Object { Remove-Tree $_.FullName }
 Get-ChildItem $env:TEMP -Directory -Filter "crimes_test_*" -ErrorAction SilentlyContinue | ForEach-Object { Remove-Tree $_.FullName }
 Remove-Item (Join-Path $env:TEMP "CRIMES-AUTO-install.log") -Force -ErrorAction SilentlyContinue
