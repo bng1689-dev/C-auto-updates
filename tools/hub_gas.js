@@ -8,6 +8,13 @@
  * เวอร์ชัน · เวลา) เพื่อให้ผู้ดูแลเห็นสมาชิกทุกเครื่องแบบเรียลไทม์ · โปรแกรมส่งก้อน
  * kind="presence" (ไม่มี rows) บ่อยกว่าก้อนตัวเลข — ก้อนนี้ต้องไม่ลบตัวเลขเดือนที่เก็บไว้
  *
+ * v3.7.0: เพิ่มชีต 'members' — ไดเรกทอรีสมาชิกกลาง (เจ้าของโปรเจกต์อนุมัติ) ทุกเครื่องส่งสมาชิกของตน
+ * (ชื่อผู้ใช้ · ชื่อที่แสดง · บทบาท · สิทธิ์ · สถานะ · รหัสผ่านแบบแฮช+salt · อัตรา · เวลาแก้) มาเก็บที่นี่แบบ
+ * 'แก้ล่าสุดชนะ' ต่อคน แล้วรับไดเรกทอรีทั้งองค์กรกลับไป → สมาชิกเข้าได้ทุกเครื่องที่ติดตั้ง
+ * ชีตนี้มีแฮชรหัสผ่าน (ไม่ใช่รหัสผ่านจริง แต่เดาออฟไลน์ได้ถ้าหลุด) — แชร์ไฟล์ Sheet นี้ให้เฉพาะผู้ดูแล
+ * ก้อน kind="members" ต้องตอบ {ok, members:[...]} เสมอ — โปรแกรมใช้การมี members เป็นตัวบอกว่า
+ * สคริปต์รุ่นใหม่แล้ว (รุ่นเก่าตอบ ok เฉย ๆ โปรแกรมจะเตือนให้อัปเดตสคริปต์)
+ *
  * ** หลังวางโค้ดรุ่นนี้ทับ ต้องอัปเดตการ Deploy ให้ใช้โค้ดใหม่ ด้วยวิธีนี้เท่านั้น: **
  *    Deploy → Manage deployments → (อันที่ใช้อยู่) ไอคอนดินสอ ✏ → Version: New version → Deploy
  *    ห้ามใช้ "New deployment" เพราะจะได้ URL /exec อันใหม่ เครื่องลูกทุกเครื่องจะยังคุยกับ
@@ -35,6 +42,96 @@
 var HUB_TOKEN = 'เปลี่ยนรหัสนี้ก่อนใช้งานจริง';
 var SHEET_NAME = 'counts';
 var PRESENCE_SHEET = 'presence';
+var MEMBERS_SHEET = 'members';
+var MEMBER_COLS = ['username', 'display_name', 'role', 'permissions', 'active', 'password_hash', 'salt',
+                   'rate_per_name', 'created_at', 'updated_at', 'deleted', 'updated_by', 'received_at'];
+
+/** ข้อความเวลาแบบ ISO — Sheet อาจแปลงข้อความวันที่เป็น Date ให้เอง ต้องคืนกลับเป็นข้อความรูปเดิมก่อนเทียบ */
+function _isoText(v) {
+  if (v instanceof Date && !isNaN(v)) {
+    var p = function (n) { return ('0' + n).slice(-2); };
+    return v.getFullYear() + '-' + p(v.getMonth() + 1) + '-' + p(v.getDate()) + 'T'
+      + p(v.getHours()) + ':' + p(v.getMinutes()) + ':' + p(v.getSeconds());
+  }
+  return String(v == null ? '' : v);
+}
+
+function _membersSheet() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var sh = ss.getSheetByName(MEMBERS_SHEET);
+  if (!sh) {
+    sh = ss.insertSheet(MEMBERS_SHEET);
+    sh.appendRow(MEMBER_COLS);
+    sh.setFrozenRows(1);
+  }
+  return sh;
+}
+
+function _readMembers(sh) {
+  var last = sh.getLastRow();
+  var vals = last >= 2 ? sh.getRange(2, 1, last - 1, MEMBER_COLS.length).getValues() : [];
+  var map = {};
+  vals.forEach(function (v) {
+    var u = String(v[0] == null ? '' : v[0]).trim();
+    if (!u) return;
+    map[u] = { username: u, display_name: String(v[1] == null ? '' : v[1]),
+               role: String(v[2] || 'member'), permissions: String(v[3] || '{}'),
+               active: Number(v[4]) ? 1 : 0, password_hash: String(v[5] == null ? '' : v[5]),
+               salt: String(v[6] == null ? '' : v[6]),
+               rate_per_name: (v[7] === '' || v[7] == null) ? null : Number(v[7]),
+               created_at: _isoText(v[8]), updated_at: _isoText(v[9]), deleted: Number(v[10]) ? 1 : 0,
+               updated_by: String(v[11] == null ? '' : v[11]), received_at: _isoText(v[12]) };
+  });
+  return map;
+}
+
+/** v3.7.0: รับสมาชิกจากเครื่องลูก → เก็บแบบ 'แก้ล่าสุดชนะ' ต่อคน (updated_at ใหม่กว่าเท่านั้นจึงทับ) → คืนทั้งไดเรกทอรี */
+function _syncMembers(installId, incoming, now) {
+  var sh = _membersSheet();
+  var map = _readMembers(sh);
+  var applied = 0;
+  (incoming || []).forEach(function (m) {
+    if (!m || typeof m !== 'object') return;
+    var u = String(m.username == null ? '' : m.username).trim();
+    if (!u || u.length > 64) return;
+    var upd = _isoText(m.updated_at);
+    var cur = map[u];
+    if (cur && String(cur.updated_at || '') >= upd) return;      // ของกลางใหม่กว่าหรือเท่ากัน → คงไว้
+    map[u] = {
+      username: u, display_name: String(m.display_name == null ? '' : m.display_name),
+      role: (m.role === 'super_admin') ? 'super_admin' : 'member',
+      permissions: (typeof m.permissions === 'string') ? m.permissions : JSON.stringify(m.permissions || {}),
+      active: Number(m.active) ? 1 : 0,
+      password_hash: String(m.password_hash == null ? '' : m.password_hash),
+      salt: String(m.salt == null ? '' : m.salt),
+      rate_per_name: (m.rate_per_name === '' || m.rate_per_name == null) ? null : Number(m.rate_per_name),
+      created_at: _isoText(m.created_at) || (cur && cur.created_at) || upd,
+      updated_at: upd, deleted: Number(m.deleted) ? 1 : 0,
+      updated_by: String(installId == null ? '' : installId), received_at: _isoText(now)
+    };
+    applied++;
+  });
+  var all = Object.keys(map).sort().map(function (k) { return map[k]; });
+  if (applied) {
+    // เวลาเก็บเป็นข้อความเสมอ (นำหน้าด้วย ' กัน Sheet แปลงเป็น Date แล้วเทียบลำดับเพี้ยน)
+    var out = all.map(function (r) {
+      return [_safeStr(r.username), _safeStr(r.display_name), r.role, _safeStr(r.permissions), r.active,
+              r.password_hash, r.salt, r.rate_per_name == null ? '' : r.rate_per_name,
+              "'" + r.created_at, "'" + r.updated_at, r.deleted, r.updated_by, "'" + r.received_at];
+    });
+    var last = sh.getLastRow();
+    if (last >= 2) sh.getRange(2, 1, last - 1, MEMBER_COLS.length).clearContent();
+    if (out.length) sh.getRange(2, 1, out.length, MEMBER_COLS.length).setValues(out);
+  }
+  return {
+    applied: applied,
+    members: all.map(function (r) {
+      return { username: r.username, display_name: r.display_name, role: r.role, permissions: r.permissions,
+               active: r.active, password_hash: r.password_hash, salt: r.salt, rate_per_name: r.rate_per_name,
+               created_at: r.created_at, updated_at: r.updated_at, deleted: r.deleted };
+    })
+  };
+}
 
 /** ข้อความที่ผู้ใช้ตั้งเอง (เช่น ชื่อที่แสดง) ต้องไม่กลายเป็นสูตรใน Sheet */
 function _safeStr(v) {
@@ -127,6 +224,12 @@ function _doPostLocked(e) {
     var data = JSON.parse(body);
     var now = new Date();
     var stored = 0;
+
+    // v3.7.0: ไดเรกทอรีสมาชิกกลาง — ก้อนนี้ไม่มี rows/users จึงไม่แตะตัวเลขและสถานะ
+    if (data.kind === 'members' && Array.isArray(data.members)) {
+      var ms = _syncMembers(data.install_id, data.members, now);
+      return _json({ ok: true, kind: 'members', applied: ms.applied, members: ms.members });
+    }
 
     // ตัวเลขรายเดือน: เฉพาะเมื่อก้อนนี้มี rows เป็นอาร์เรย์จริง ๆ
     // (ก้อน presence ไม่มี rows — ต้องไม่ไปลบตัวเลขที่เก็บไว้)

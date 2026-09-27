@@ -78,6 +78,19 @@ def main():
         # ── สมัคร Super Admin คนแรก ──
         page.wait_for_selector("#authSetupBox:not(.hidden)", timeout=15000)
         check("หน้าแรกโชว์ฟอร์มสร้างบัญชี", True)
+        # ── v3.7.0: โหมดตั้งค่าเครื่อง — เครื่องเพิ่มเติมเห็นเฉพาะช่องรหัสเชื่อมต่อ (ไม่สร้าง Super Admin ซ้ำ) ──
+        page.click('#setupModeBar [data-smode="join"]')
+        page.wait_for_selector("#authJoinForm:not(.hidden)", timeout=5000)
+        check("โหมด 'เครื่องเพิ่มเติม' → ฟอร์มเข้าร่วมโผล่ ฟอร์มสร้าง Super Admin ซ่อน",
+              page.eval_on_selector("#authSetupForm", "el => el.classList.contains('hidden')"))
+        page.fill("#joinHubCode", "CRIMES-HUB:zzz")
+        page.click("#btnJoinSubmit")
+        page.wait_for_function("document.getElementById('authJoinErr').textContent.includes('ไม่ถูกต้อง')", timeout=8000)
+        check("รหัสเชื่อมต่อผิด → แจ้งบนหน้า ไม่หลุดไปไหน", True)
+        page.click('#setupModeBar [data-smode="first"]')
+        page.wait_for_selector("#authSetupForm:not(.hidden)", timeout=5000)
+        check("กลับโหมด 'เครื่องแรก' → ฟอร์มสร้าง Super Admin กลับมา",
+              page.eval_on_selector("#authJoinForm", "el => el.classList.contains('hidden')"))
         page.fill("#suUser", "admin1")
         page.fill("#suName", "แอดมินทดสอบ")
         page.fill("#suPw", "secret9")
