@@ -47,6 +47,7 @@ def fake_status():
          "step_mode": STATE.get("step_mode", False),
          "current_step": "กรอกเลขบัตร", "speed": 3, "speed_label": "ปกติ",
          "log": ["เปิดเบราว์เซอร์แล้ว"], "save_seq": 0, "file_index": 1,
+         "file_done": STATE.get("file_done", 0), "current_file": "งาน.xlsx", "current_path": "งาน.xlsx",
          "account": "", "recording": False, "recording_steps": 0, "pause_reason": ""}
     return s
 
@@ -139,6 +140,25 @@ def main():
         page.wait_for_timeout(1600)
         why = vis(page, "#btnResume")
         check("พักอยู่: ปุ่ม 'ค้นต่อ' มองเห็นจริง", why == "", why)
+
+        # ── v3.6.1: เวลาที่เหลือต้องเริ่มนับใหม่หลังพัก — ช่วงที่พักไม่ถูกนับเป็นเวลาค้น ──
+        # เดิมจุดตั้งต้นค้างไว้ข้ามช่วงพัก → กดค้นต่อแล้วอัตราแถว/นาทีต่ำเกินจริง เวลาที่เหลือพุ่งเกินจริง
+        STATE.update(state="running", step_mode=False, awaiting_step=False, file_done=10)
+        page.wait_for_timeout(1600)                       # จุดตั้งต้นของอัตรา = 10 แถว
+        STATE.update(file_done=14)
+        page.wait_for_timeout(5500)                       # +4 แถวใน >5 วิ → มีค่า ETA ให้โชว์
+        eta = page.eval_on_selector("#rbEta", "el => el.classList.contains('hidden') ? '' : el.textContent")
+        check("กำลังค้น: ชิปเวลาที่เหลือโผล่พร้อมอัตราแถว/นาที", "แถว/นาที" in eta, eta)
+        STATE.update(state="paused")
+        page.wait_for_timeout(1600)
+        STATE.update(state="running")                     # ค้นต่อ — ยังไม่มีแถวใหม่
+        page.wait_for_timeout(1600)
+        check("ค้นต่อหลังพัก: ชิปเวลาที่เหลือซ่อนจนกว่าจะมีอัตราใหม่ (ไม่เอาช่วงพักมาคิด)",
+              page.eval_on_selector("#rbEta", "el => el.classList.contains('hidden')"))
+        STATE.update(file_done=17)
+        page.wait_for_timeout(5500)
+        eta = page.eval_on_selector("#rbEta", "el => el.classList.contains('hidden') ? '' : el.textContent")
+        check("ค้นต่อไปอีก 3 แถว → เวลาที่เหลือกลับมาโชว์จากอัตราใหม่", "แถว/นาที" in eta, eta)
 
         # ── ไม่มีคิวเลย + ไม่มีรอบทำงาน → แถวคู่ต้องซ่อนหมด ไม่เหลือช่องว่าง ──
         STATE.update(state="idle", step_mode=False)

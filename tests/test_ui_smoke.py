@@ -364,6 +364,10 @@ def main():
         # ── ออกจากระบบ → เข้าใหม่ด้วยรหัสผ่านปกติ ──
         page.click("#btnLogout")
         page.wait_for_selector("#screen-auth:not(.hidden)", timeout=15000)
+        # v3.6.1: กดออกทันทีหลังปลดล็อก (หน้าแรกยังโหลดค้าง) — คำตอบที่มาทีหลัง /api/logout เคยคืนคุกกี้
+        # ที่ยังใช้ได้ให้เบราว์เซอร์ ทำให้รีโหลดแล้วยังอยู่ในระบบ (CI ล้มที่บรรทัดบนเพราะเหตุนี้)
+        st = page.evaluate("async () => (await fetch('/api/me')).status")
+        check("ออกจากระบบแล้วเซิร์ฟเวอร์ไม่รับ session เดิมอีก แม้คุกกี้จะถูกส่งกลับมาทับ", st == 401, f"status {st}")
         page.wait_for_selector("#authMethodBar:not(.hidden)", timeout=15000)
         page.click('#authMethodBar [data-method="password"]')
         page.fill("#authLoginUser", "admin1")

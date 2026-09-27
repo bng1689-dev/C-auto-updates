@@ -54,6 +54,28 @@ def cmd_extract(args):
     pkg_extract(force=args.force)
 
 
+def _validate_package(path, expected_names, new):
+    """ด่านตรวจแพ็กเกจ — คืนรายการไฟล์ใน zip · โยน AssertionError/SyntaxError เมื่อไม่ผ่าน"""
+    with zipfile.ZipFile(path) as z:
+        got = [i.filename for i in z.infolist()]
+        assert got == expected_names, "รายการไฟล์ไม่ตรงกับรุ่นก่อน (+ไฟล์ใหม่ที่อนุญาต)"
+        bad = [n for n in got for f in FORBIDDEN if f in n]
+        assert not bad, f"มีไฟล์ต้องห้ามในแพ็กเกจ: {bad}"
+        assert z.read(f"{PKG}/app/VERSION").decode().strip() == new
+        html = z.read(f"{PKG}/app/frontend/index.html").decode("utf-8")
+        eng = z.read(f"{PKG}/app/backend/engine.py").decode("utf-8")
+        wk = z.read(f"{PKG}/app/backend/worker.py").decode("utf-8")
+        srv = z.read(f"{PKG}/app/backend/server.py").decode("utf-8")
+        for group, text, label in ((CORE_HTML, html, "index.html"), (CORE_ENGINE, eng, "engine.py"),
+                                   (CORE_WORKER, wk, "worker.py"), (CORE_SERVER, srv, "server.py")):
+            missing = [fn for fn in group if fn not in text]
+            assert not missing, f"{label} ขาดฟังก์ชันแกน: {missing}"
+        for n in got:
+            if n.endswith(".py"):
+                compile(z.read(n).decode("utf-8"), n, "exec")
+    return got
+
+
 def cmd_build(args):
     mf = load_manifest()
     cur = str(mf.get("version", "0"))
@@ -74,11 +96,23 @@ def cmd_build(args):
     out_zip = ROOT / f"{PKG}_v{new}.zip"
     if out_zip.exists() and not args.overwrite:
         sys.exit(f"{out_zip.name} มีอยู่แล้ว (ใช้ --overwrite ถ้าตั้งใจสร้างทับ)")
+    # v3.6.1: เขียนลงไฟล์ชั่วคราวก่อน ผ่านด่านตรวจครบแล้วค่อยเปลี่ยนชื่อเป็น zip จริง — เดิมไฟล์ต้องห้าม
+    # (เช่น hub_gas.js) ที่หลุดเข้า build/ ถูกเขียนลง zip ชื่อจริงก่อนด่านตรวจจะปฏิเสธ แล้ว zip นั้นค้างอยู่
+    # ในรีโป (git add -A กวาดขึ้นไปได้) และขวางการ build ครั้งถัดไปจนกว่าจะลบเอง
+    part = out_zip.with_name(out_zip.name + ".part")
 
-    changed, extra_local = [], []
+    changed, added = [], []
     with zipfile.ZipFile(prev_zip) as zin:
         names = [i.filename for i in zin.infolist()]
-        with zipfile.ZipFile(out_zip, "w", zipfile.ZIP_DEFLATED) as zout:
+        # ไฟล์ใหม่ใน build/ ที่ไม่มีในแพ็กเกจรุ่นก่อน — ต้องตั้งใจเพิ่มเท่านั้น (--allow-new-files)
+        extra_local = sorted(
+            p.relative_to(ROOT / "build").as_posix() for p in tree.rglob("*")
+            if p.is_file() and "__pycache__" not in p.parts and p.suffix != ".pyc"
+            and p.relative_to(ROOT / "build").as_posix() not in names)
+        if extra_local and not args.allow_new_files:
+            sys.exit("ไฟล์ใหม่ใน build/ ที่ไม่ได้อยู่ในแพ็กเกจรุ่นก่อน: " + ", ".join(extra_local)
+                     + "\n   ถ้าตั้งใจเพิ่มไฟล์ใหม่จริง ใช้ --allow-new-files (จะถูกใส่ลง zip และตรวจเหมือนไฟล์อื่น)")
+        with zipfile.ZipFile(part, "w", zipfile.ZIP_DEFLATED) as zout:
             for info in zin.infolist():
                 data = zin.read(info.filename)
                 if not info.is_dir():
@@ -91,41 +125,21 @@ def cmd_build(args):
                     else:
                         print(f"  ! ไม่พบ {info.filename} ใน build/ — ใช้ของรุ่นก่อน")
                 zout.writestr(info, data)
-    # ไฟล์ใหม่ใน build/ ที่ไม่มีในแพ็กเกจรุ่นก่อน — ต้องตั้งใจเพิ่มเท่านั้น
-    for p in tree.rglob("*"):
-        if p.is_file():
-            rel = p.relative_to(ROOT / "build").as_posix()
-            if rel not in names and "__pycache__" not in rel and not rel.endswith(".pyc"):
-                extra_local.append(rel)
-    if extra_local:
-        msg = "ไฟล์ใหม่ใน build/ ที่ไม่ได้อยู่ในแพ็กเกจ (ไม่ถูกรวม): " + ", ".join(extra_local)
-        if args.allow_new_files:
-            print("  ! " + msg)
-        else:
-            out_zip.unlink(missing_ok=True)
-            sys.exit(msg + "\n   ถ้าตั้งใจเพิ่มไฟล์ใหม่จริง ใช้ --allow-new-files (ไฟล์ใหม่ยังต้องใส่ zip เอง)")
-    if f"{PKG}/app/VERSION" not in changed:
-        out_zip.unlink(missing_ok=True)
-        sys.exit("VERSION ไม่เปลี่ยน — ผิดปกติ")
-
-    # ---- ด่านตรวจแพ็กเกจ ----
-    with zipfile.ZipFile(out_zip) as z:
-        got = [i.filename for i in z.infolist()]
-        assert got == names, "รายการไฟล์ไม่ตรงกับรุ่นก่อน"
-        bad = [n for n in got for f in FORBIDDEN if f in n]
-        assert not bad, f"มีไฟล์ต้องห้ามในแพ็กเกจ: {bad}"
-        assert z.read(f"{PKG}/app/VERSION").decode().strip() == new
-        html = z.read(f"{PKG}/app/frontend/index.html").decode("utf-8")
-        eng = z.read(f"{PKG}/app/backend/engine.py").decode("utf-8")
-        wk = z.read(f"{PKG}/app/backend/worker.py").decode("utf-8")
-        srv = z.read(f"{PKG}/app/backend/server.py").decode("utf-8")
-        for group, text, label in ((CORE_HTML, html, "index.html"), (CORE_ENGINE, eng, "engine.py"),
-                                   (CORE_WORKER, wk, "worker.py"), (CORE_SERVER, srv, "server.py")):
-            missing = [fn for fn in group if fn not in text]
-            assert not missing, f"{label} ขาดฟังก์ชันแกน: {missing}"
-        for n in got:
-            if n.endswith(".py"):
-                compile(z.read(n).decode("utf-8"), n, "exec")
+            # v3.6.1: --allow-new-files ต้องใส่ไฟล์ใหม่ลง zip จริง (เดิมแค่เตือนแล้วปล่อยผ่าน → แพ็กเกจขาดไฟล์
+            # ทั้งที่ manifest/sha256 ออกมาสวยงาม — โปรแกรม import ไม่เจอหลังอัปเดต)
+            for rel in extra_local:
+                zout.write(ROOT / "build" / rel, arcname=rel)
+                added.append(rel)
+                print(f"  + เพิ่มไฟล์ใหม่ {rel}")
+    # ---- ด่านตรวจแพ็กเกจ (บนไฟล์ชั่วคราว) — ไม่ผ่านข้อไหน ไฟล์ชั่วคราวถูกลบ ไม่มี zip ค้าง ----
+    try:
+        if f"{PKG}/app/VERSION" not in changed:
+            sys.exit("VERSION ไม่เปลี่ยน — ผิดปกติ")
+        got = _validate_package(part, names + added, new)
+    except BaseException:
+        part.unlink(missing_ok=True)
+        raise
+    part.replace(out_zip)
 
     digest = sha256(out_zip)
     notes = args.notes.strip() if args.notes else f"เวอร์ชัน {new}"
@@ -148,24 +162,33 @@ def cmd_build(args):
     print(f"✓ {out_zip.name}  ({out_zip.stat().st_size:,} ไบต์ · {len(got)} รายการ)")
     print(f"  sha256: {digest}")
     print(f"  ไฟล์ที่เปลี่ยนจาก v{cur}: " + ", ".join(n.split("/", 1)[1] for n in changed))
+    if added:
+        print("  ไฟล์ใหม่ที่เพิ่มเข้าแพ็กเกจ: " + ", ".join(n.split("/", 1)[1] for n in added))
     print(f"  manifest: v{new} · open={bool(args.open)}")
     print("ถัดไป: python tests/run_all.py --quick → git add -A → commit → push → PR → merge → release.py verify")
 
 
 def cmd_verify(args):
+    """ตรวจ 'ของที่ผู้ใช้ปลายทางจะได้รับจริง' — manifest ออนไลน์ต้องตรงกับในเครื่องทุกช่อง และ zip ที่
+    manifest ออนไลน์ชี้ต้องมี sha256 ตรงกับที่ประกาศ (v3.6.1 — เดิมดาวน์โหลด zip ตาม URL ในเครื่องมาเทียบ
+    จึงบอก ✓ ได้ทั้งที่ manifest ออนไลน์ยังเป็นรุ่นเก่า หรือชี้ URL/sha256 ผิด)"""
     mf = load_manifest()
-    ver = mf["version"]
-    print(f"manifest ในเครื่อง: v{ver}")
+    print(f"manifest ในเครื่อง: v{mf['version']}")
     live_mf = json.loads(urllib.request.urlopen(RAW_BASE + "update-manifest.json", timeout=30).read())
-    print(f"manifest ออนไลน์:  v{live_mf.get('version')}"
-          + ("" if live_mf.get("version") == ver else "   ← ยังไม่ตรง (แคช CDN ของ GitHub ~5 นาที หรือยังไม่ merge)"))
+    print(f"manifest ออนไลน์:  v{live_mf.get('version')}")
+    diff = [k for k in ("version", "url", "sha256", "open") if live_mf.get(k) != mf.get(k)]
+    for k in diff:
+        print(f"  ✗ {k}: ออนไลน์={live_mf.get(k)!r}  ในเครื่อง={mf.get(k)!r}")
+    if diff:
+        print("  (ยังไม่ merge หรือแคช CDN ของ GitHub ~5 นาที — รอสักครู่แล้วรันใหม่)")
+    url = live_mf.get("url") or mf["url"]
+    live = hashlib.sha256(urllib.request.urlopen(url, timeout=120).read()).hexdigest()
     local_zip = ROOT / mf["url"].rsplit("/", 1)[-1]
-    data = urllib.request.urlopen(mf["url"], timeout=120).read()
-    live = hashlib.sha256(data).hexdigest()
-    print(f"zip ออนไลน์ sha256: {live}")
-    print(f"zip ในเครื่อง      : {sha256(local_zip) if local_zip.exists() else '(ไม่มีไฟล์)'}")
-    print(f"manifest sha256    : {mf['sha256']}")
-    ok = live == mf["sha256"] == (sha256(local_zip) if local_zip.exists() else live)
+    local = sha256(local_zip) if local_zip.exists() else None
+    print(f"zip ที่ manifest ออนไลน์ชี้ sha256 : {live}")
+    print(f"sha256 ที่ manifest ออนไลน์ประกาศ  : {live_mf.get('sha256')}")
+    print(f"zip ในเครื่อง                     : {local or '(ไม่มีไฟล์)'}")
+    ok = not diff and live == live_mf.get("sha256") == mf["sha256"] == (local or live)
     print("✓ ตรงกันทั้งหมด" if ok else "✗ ไม่ตรง — ห้ามให้ผู้ใช้อัปเดตจนกว่าจะแก้")
     return 0 if ok else 1
 
