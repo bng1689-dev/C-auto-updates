@@ -101,6 +101,39 @@ for cmd in json.loads(sys.stdin.read() or "[]"):
         out[key] = c.get("/api/hub/members/state").get_json()
     elif op == "has_passcode":
         out[key] = db.has_passcode(uid_of(cmd["u"]))
+    # ---- v3.9.0: สมุดกองกลางกลาง ----
+    elif op == "ledger_add":                     # บันทึกรายการให้เจ้าของ u (คนที่ล็อกอินอยู่ต้องเป็น Super Admin)
+        r = c.post("/api/admin/ledger", json={"user_id": uid_of(cmd["u"]), "kind": cmd["kind"], "amount": cmd["amount"],
+                                              "note": cmd.get("note", ""), "ym": cmd.get("ym", "")})
+        out[key] = [r.status_code, r.get_json()]
+    elif op == "ledger_del":                     # ลบด้วย gid (id ในเครื่องต่างกันแต่ละเครื่อง)
+        with db.get_conn() as conn:
+            row = conn.execute("SELECT id FROM ledger WHERE gid=?", (cmd["gid"],)).fetchone()
+        r = c.delete(f"/api/admin/ledger/{row['id'] if row else 0}")
+        out[key] = [r.status_code, r.get_json()]
+    elif op == "ledger_sync":
+        res = server._ledger_sync_now("test")
+        out[key] = {"ok": bool(res.get("ok")), "error": res.get("error", ""), "summary": res.get("summary"),
+                    "rejected": res.get("rejected"), "admin": res.get("admin"), "seq": res.get("seq")}
+    elif op == "ledger":                         # ทุกแถวในเครื่อง (รวมที่ลบแล้ว) พร้อมธงซิงก์
+        with db.get_conn() as conn:
+            out[key] = [dict(r) for r in conn.execute(
+                "SELECT gid, owner, kind, amount, note, deleted, hub_rev, sync_dirty, user_id, origin FROM ledger ORDER BY id").fetchall()]
+    elif op == "ledger_pending":
+        out[key] = db.count_pending_ledger()
+    elif op == "board":                          # หน้ากองกลางในสายตาคนที่ล็อกอินอยู่
+        r = c.get("/api/live/board" + (f"?ym={cmd['ym']}" if cmd.get("ym") else ""))
+        out[key] = [r.status_code, r.get_json()]
+    elif op == "ledger_state":
+        out[key] = dict(server._ledger_last)
+    elif op == "teams":                          # ทีมในเครื่องนี้: ชื่อ · อัตรา · สมาชิก (ชื่อผู้ใช้) · สร้างตามกลางไหม
+        with db.get_conn() as conn:
+            synced = {r["id"]: r["synced"] for r in conn.execute("SELECT id, synced FROM teams").fetchall()}
+        out[key] = [{"name": t["name"], "rate": t["rate_per_name"], "synced": synced.get(t["id"], 0),
+                     "members": sorted(m["username"] for m in t["members"])} for t in db.list_teams()]
+    elif op in ("get", "post", "put", "delete"):  # เรียก API ใดก็ได้ (ใช้เตรียมสถานการณ์)
+        r = getattr(c, op)(cmd["path"], json=cmd.get("json")) if op != "get" else c.get(cmd["path"])
+        out[key] = [r.status_code, r.get_json()]
     else:
         out[key] = f"unknown op {op}"
 print(json.dumps(out, ensure_ascii=False))

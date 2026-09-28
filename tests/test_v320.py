@@ -120,11 +120,16 @@ def main():
     check("บันทึกรับ/จ่าย → ส่งตัวเลขขึ้นศูนย์กลางทันที", any(p.get("kind") == "counts" for p in sent[before:]), str([p.get("kind") for p in sent[before:]]))
     cnt = next(p for p in sent[before:] if p.get("kind") == "counts")
     check("ก้อน counts มี users (สถานะ) มาด้วย และ rows ตาม whitelist", isinstance(cnt.get("users"), list) and all(set(r) == set(hub.ALLOWED_FIELDS) for r in cnt["rows"]))
-    b = m2.get("/api/live/board").get_json()
-    check("กองกลาง: ยอด = สมุดบันทึกล้วน (รับ 250 จ่าย 40 สุทธิ 210 · 2 รายการ) ไม่รวมผลค้น",
-          b["totals"] == {"in": 250.0, "out": 40.0, "net": 210.0, "entries": 2}, str(b["totals"]))
-    check("กราฟกองกลางรายวันจากสมุดบันทึก", b["daily"] and set(b["daily"][0]) == {"d", "in", "out"})
     a = admin.get("/api/live/board").get_json()
+    check("กองกลาง: ยอด = สมุดบันทึกล้วน (รับ 250 จ่าย 40 สุทธิ 210 · 2 รายการ) ไม่รวมผลค้น",
+          a["totals"] == {"in": 250.0, "out": 40.0, "net": 210.0, "entries": 2}, str(a["totals"]))
+    check("กราฟกองกลางรายวันจากสมุดบันทึก", a["daily"] and set(a["daily"][0]) == {"d", "in", "out"})
+    b = m2.get("/api/live/board").get_json()
+    check("v3.9.0: wichai (ทีม B คนเดียว) เห็นเฉพาะของตัวเอง — จ่าย 40 · 1 รายการ",
+          b["totals"] == {"in": 0.0, "out": 40.0, "net": -40.0, "entries": 1} and b["scope"] == "team", str(b["totals"]))
+    b1 = m1.get("/api/live/board").get_json()
+    check("v3.9.0: somchai (ทีม A กับ admin1) เห็นของทีม — รับ 250 · 1 รายการ (ไม่เห็นของ wichai)",
+          b1["totals"] == {"in": 250.0, "out": 0.0, "net": 250.0, "entries": 1}, str(b1["totals"]))
     check("รายคนในกองกลางมีเฉพาะคนที่มีรายการ (2 คน) และไม่มีคอลัมน์ผลค้น",
           len(a["rows"]) == 2 and all("count" not in r and "earned" not in r for r in a["rows"]))
 

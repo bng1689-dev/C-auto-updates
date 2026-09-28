@@ -27,6 +27,21 @@
  *  • ไม่รับการแก้ที่ทำให้ไม่เหลือ Super Admin ที่เปิดใช้งานเลย (reason "last_admin") — สองเครื่องปิดกันเองพร้อมกัน
  *    ก็ไม่ทำให้ทั้งองค์กรล็อกตัวเองออก
  *
+ * v3.9.0: ชีต 'members' เพิ่มคอลัมน์ 'teams' — ทีมที่สมาชิกสังกัด [[ชื่อทีม, อัตราทีม], ...] ("เครื่อง Superadmin เป็นผู้จัดการ
+ * ทุกสิทธิ์ได้") จัดทีมจากเครื่อง Super Admin ที่มีรหัสผู้ดูแล แล้วทุกเครื่องได้ทีมเดียวกัน (เป็นฟิลด์ที่ต้องมี ADMIN_TOKEN)
+ *
+ * v3.9.0: เพิ่มชีต 'ledger' — สมุดกองกลางกลาง (เจ้าของโปรเจกต์สั่ง "แสดงค่าเดียวกันทุกเครื่อง") ทุกเครื่องเห็นรายการ
+ * รับ/จ่ายชุดเดียวกัน · ก้อน kind="ledger" ส่ง "รายการที่เครื่องนั้นเพิ่ม/ลบ" + after (rev สูงสุดที่เคยรับ) แล้วรับ
+ * ส่วนต่าง (rev > after) กลับไป — ไม่ใช่ทั้งเล่มทุกรอบ
+ *  • rev ของชีตนี้เป็นเลขเดียวทั้งเล่ม (+1 ทุกครั้งที่รับการแก้ใด ๆ) แต่ละแถวจดว่าถูกแก้ล่าสุดที่ rev ไหน
+ *    เครื่องลูกส่ง rev ที่ตนเห็นของแถวนั้นมา ไม่ตรง = conflict ของกลางชนะ (เหมือนสมาชิก)
+ *  • การเพิ่ม/ลบต้องเซ็นด้วย ADMIN_TOKEN (Super Admin เป็นผู้จัดการกองกลาง) — เครื่องที่มีแค่ HUB_TOKEN ดึงได้อย่างเดียว
+ *    (ไม่มีข้อยกเว้นชีตว่างเหมือนสมาชิก: ตั้ง ADMIN_TOKEN ก่อน ไม่งั้นรายการจะ "รอส่ง" อยู่ที่เครื่องผู้ดูแล)
+ *  • ลบ = แถวยังอยู่แต่ deleted=1 (ป้ายหลุมศพให้เครื่องอื่นลบตาม) · ยอดรับ/จ่ายของกระดาน (doGet) คิดจากชีตนี้
+ *    (ของจริง ไม่ซ้ำ ไม่ค้าง) — โปรแกรม 3.9.0 ไม่ส่งยอดเงินมาในก้อน counts อีกแล้ว คอลัมน์ amount_* ในชีต counts จึงว่าง
+ *  • เครื่องที่ส่ง after เกินกว่า rev สูงสุดของเล่มนี้ (เปลี่ยนศูนย์กลาง/ชีตถูกสร้างใหม่) ได้ทั้งเล่มกลับไป (full)
+ *  • หมายเหตุเป็นข้อความที่ผู้ดูแลพิมพ์เอง — ห้ามพิมพ์เลขบัตร/ชื่อผู้ถูกค้น/ผลคดี
+ *
  * ** หลังวางโค้ดรุ่นนี้ทับ ต้องอัปเดตการ Deploy ให้ใช้โค้ดใหม่ ด้วยวิธีนี้เท่านั้น: **
  *    Deploy → Manage deployments → (อันที่ใช้อยู่) ไอคอนดินสอ ✏ → Version: New version → Deploy
  *    ห้ามใช้ "New deployment" เพราะจะได้ URL /exec อันใหม่ เครื่องลูกทุกเครื่องจะยังคุยกับ
@@ -62,8 +77,13 @@ var ADMIN_TOKEN = 'เปลี่ยนรหัสผู้ดูแลนี�
 var SHEET_NAME = 'counts';
 var PRESENCE_SHEET = 'presence';
 var MEMBERS_SHEET = 'members';
+// v3.9.0: + teams = ทีมที่สังกัด JSON [[ชื่อทีม, อัตราทีม], ...] (คอลัมน์ท้ายสุด — ชีตที่สร้างโดยรุ่น 3.7.0 จะถูกเติมหัวคอลัมน์ให้)
 var MEMBER_COLS = ['username', 'display_name', 'role', 'permissions', 'active', 'password_hash', 'salt',
-                   'rate_per_name', 'created_at', 'updated_at', 'deleted', 'rev', 'updated_by', 'received_at'];
+                   'rate_per_name', 'created_at', 'updated_at', 'deleted', 'rev', 'updated_by', 'received_at', 'teams'];
+// v3.9.0: สมุดกองกลางกลาง — origin = เครื่องที่บันทึกรายการ (ไม่เปลี่ยนแม้เครื่องอื่นลบ) · updated_by = เครื่องที่แก้ล่าสุด
+var LEDGER_SHEET = 'ledger';
+var LEDGER_COLS = ['gid', 'ts', 'ym', 'owner', 'kind', 'amount', 'note', 'created_by', 'deleted', 'rev',
+                   'origin', 'updated_by', 'received_at'];
 
 /** ข้อความเวลาแบบ ISO — Sheet อาจแปลงข้อความวันที่เป็น Date ให้เอง ต้องคืนกลับเป็นข้อความรูปเดิมก่อนเทียบ */
 function _isoText(v) {
@@ -82,8 +102,30 @@ function _membersSheet() {
     sh = ss.insertSheet(MEMBERS_SHEET);
     sh.appendRow(MEMBER_COLS);
     sh.setFrozenRows(1);
+  } else if (sh.getLastColumn() < MEMBER_COLS.length) {
+    sh.getRange(1, MEMBER_COLS.length, 1, 1).setValues([[MEMBER_COLS[MEMBER_COLS.length - 1]]]);   // ชีตรุ่น 3.7.0 → เติมหัว 'teams'
   }
   return sh;
+}
+
+/** ทีมของสมาชิกในรูปมาตรฐาน: JSON ของ [[ชื่อทีม, อัตราทีม|null], ...] เรียงตามชื่อ ไม่ซ้ำ (รับทั้ง JSON/อาร์เรย์) */
+function _normTeams(v) {
+  if (typeof v === 'string') { try { v = v.trim() ? JSON.parse(v) : []; } catch (e) { v = []; } }
+  if (!Array.isArray(v)) v = [];
+  var seen = {}, out = [];
+  v.forEach(function (it) {
+    var name, rate;
+    if (it && typeof it === 'object' && !Array.isArray(it)) { name = it.name; rate = (it.rate === undefined) ? it.rate_per_name : it.rate; }
+    else if (Array.isArray(it)) { name = it[0]; rate = it[1]; }
+    else { name = it; rate = null; }
+    name = String(name == null ? '' : name).trim().slice(0, 64);
+    if (!name || seen[name]) return;
+    seen[name] = true;
+    var r = (rate === '' || rate == null || isNaN(Number(rate))) ? null : Number(rate);
+    out.push([name, r]);
+  });
+  out.sort(function (a, b) { return a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0; });
+  return JSON.stringify(out);
 }
 
 function _readMembers(sh) {
@@ -100,7 +142,8 @@ function _readMembers(sh) {
                rate_per_name: (v[7] === '' || v[7] == null) ? null : Number(v[7]),
                created_at: _isoText(v[8]), updated_at: _isoText(v[9]), deleted: Number(v[10]) ? 1 : 0,
                rev: Number(v[11]) || 0,
-               updated_by: String(v[12] == null ? '' : v[12]), received_at: _isoText(v[13]) };
+               updated_by: String(v[12] == null ? '' : v[12]), received_at: _isoText(v[13]),
+               teams: _normTeams(v[14]) };
   });
   return map;
 }
@@ -117,11 +160,14 @@ function _memberCandidate(m, u, cur, nowText) {
     salt: String(m.salt == null ? '' : m.salt),
     rate_per_name: (m.rate_per_name === '' || m.rate_per_name == null) ? null : Number(m.rate_per_name),
     created_at: _isoText(m.created_at) || (cur && cur.created_at) || upd,
-    updated_at: upd, deleted: Number(m.deleted) ? 1 : 0
+    updated_at: upd, deleted: Number(m.deleted) ? 1 : 0,
+    // โปรแกรมรุ่นก่อน 3.9.0 ไม่ส่ง teams มา (undefined) → คงทีมเดิมไว้ ไม่ใช่ล้างทิ้ง
+    teams: (m.teams === undefined || m.teams === null) ? ((cur && cur.teams) || '[]') : _normTeams(m.teams)
   };
 }
 
-var _PROTECTED = ['display_name', 'role', 'permissions', 'active', 'rate_per_name', 'deleted'];
+// v3.9.0: teams อยู่ในรายการที่ต้องมีรหัสผู้ดูแล — สังกัดทีม/อัตราทีมจัดจากเครื่อง Super Admin เท่านั้น
+var _PROTECTED = ['display_name', 'role', 'permissions', 'active', 'rate_per_name', 'deleted', 'teams'];
 function _sameFields(a, b, fields) {
   for (var i = 0; i < fields.length; i++) {
     var k = fields[i];
@@ -176,7 +222,8 @@ function _syncMembers(installId, incoming, now, isAdmin) {
     var out = all.map(function (r) {
       return [_safeStr(r.username), _safeStr(r.display_name), r.role, _safeStr(r.permissions), r.active,
               r.password_hash, r.salt, r.rate_per_name == null ? '' : r.rate_per_name,
-              "'" + r.created_at, "'" + r.updated_at, r.deleted, r.rev, r.updated_by, "'" + r.received_at];
+              "'" + r.created_at, "'" + r.updated_at, r.deleted, r.rev, r.updated_by, "'" + r.received_at,
+              _safeStr(r.teams || '[]')];
     });
     var last = sh.getLastRow();
     if (last >= 2) sh.getRange(2, 1, last - 1, MEMBER_COLS.length).clearContent();
@@ -187,7 +234,8 @@ function _syncMembers(installId, incoming, now, isAdmin) {
     members: all.map(function (r) {
       return { username: r.username, display_name: r.display_name, role: r.role, permissions: r.permissions,
                active: r.active, password_hash: r.password_hash, salt: r.salt, rate_per_name: r.rate_per_name,
-               created_at: r.created_at, updated_at: r.updated_at, deleted: r.deleted, rev: r.rev };
+               created_at: r.created_at, updated_at: r.updated_at, deleted: r.deleted, rev: r.rev,
+               teams: r.teams || '[]' };
     })
   };
 }
@@ -196,6 +244,134 @@ function _syncMembers(installId, incoming, now, isAdmin) {
 function _safeStr(v) {
   var s = String(v == null ? '' : v);
   return /^[=+\-@]/.test(s) ? "'" + s : s;
+}
+
+// ──────────────── v3.9.0: สมุดกองกลางกลาง ────────────────
+/** เดือน 'YYYY-MM' — Sheet อาจแปลงข้อความนี้เป็น Date ให้เอง ต้องคืนกลับเป็นข้อความรูปเดิม */
+function _ymText(v) {
+  if (v instanceof Date && !isNaN(v)) return v.getFullYear() + '-' + ('0' + (v.getMonth() + 1)).slice(-2);
+  return String(v == null ? '' : v).slice(0, 7);
+}
+
+function _ledgerSheet() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var sh = ss.getSheetByName(LEDGER_SHEET);
+  if (!sh) {
+    sh = ss.insertSheet(LEDGER_SHEET);
+    sh.appendRow(LEDGER_COLS);
+    sh.setFrozenRows(1);
+  }
+  return sh;
+}
+
+function _readLedger(sh) {
+  var last = sh.getLastRow();
+  var vals = last >= 2 ? sh.getRange(2, 1, last - 1, LEDGER_COLS.length).getValues() : [];
+  var map = {};
+  vals.forEach(function (v) {
+    var g = String(v[0] == null ? '' : v[0]).trim();
+    if (!g) return;
+    map[g] = { gid: g, ts: _isoText(v[1]), ym: _ymText(v[2]), owner: String(v[3] == null ? '' : v[3]),
+               kind: String(v[4] || ''), amount: Number(v[5]) || 0, note: String(v[6] == null ? '' : v[6]),
+               created_by: String(v[7] == null ? '' : v[7]), deleted: Number(v[8]) ? 1 : 0, rev: Number(v[9]) || 0,
+               origin: String(v[10] == null ? '' : v[10]), updated_by: String(v[11] == null ? '' : v[11]),
+               received_at: _isoText(v[12]) };
+  });
+  return map;
+}
+
+/** แถวที่เครื่องลูกส่งมา → รูปแบบมาตรฐาน · คืน null ถ้ารูปแบบใช้ไม่ได้ (ประเภท/จำนวน/เดือน) */
+function _ledgerCandidate(m, gid, cur, nowText) {
+  var kind = (m.kind === 'in' || m.kind === 'out') ? m.kind : '';
+  var amount = Math.round((Number(m.amount) || 0) * 100) / 100;
+  var ts = _isoText(m.ts).slice(0, 19) || (cur && cur.ts) || nowText;
+  var ym = _ymText(m.ym) || ts.slice(0, 7);
+  if (!kind || !(amount > 0) || !isFinite(amount) || !/^\d{4}-\d{2}$/.test(ym)) return null;
+  return {
+    gid: gid, ts: ts, ym: ym, owner: String(m.owner == null ? '' : m.owner).slice(0, 64), kind: kind, amount: amount,
+    note: String(m.note == null ? '' : m.note).slice(0, 300),
+    created_by: String(m.created_by == null ? '' : m.created_by).slice(0, 64) || (cur && cur.created_by) || '',
+    deleted: Number(m.deleted) ? 1 : 0
+  };
+}
+var _LEDGER_CONTENT = ['ts', 'ym', 'owner', 'kind', 'amount', 'note', 'deleted'];
+
+/** v3.9.0: รับรายการที่เครื่องลูกเพิ่ม/ลบ → ตรวจ rev / สิทธิ์ → คืนส่วนต่าง (rev > after) + รายการที่เครื่องนั้นเพิ่งส่ง
+ *  isAdmin = ก้อนนี้เซ็นด้วย ADMIN_TOKEN ถูกต้อง · ไม่ใช่ = ดึงได้อย่างเดียว (ทุกการแก้ถูกปัดตก reason "auth") */
+function _syncLedger(installId, incoming, after, now, isAdmin) {
+  var sh = _ledgerSheet();
+  var map = _readLedger(sh);
+  var maxRev = 0;
+  Object.keys(map).forEach(function (k) { if (map[k].rev > maxRev) maxRev = map[k].rev; });
+  // after เกินกว่าที่เล่มนี้เคยนับ = เครื่องนั้นจำเลขจากศูนย์กลางเก่า/ชีตที่ถูกสร้างใหม่ → ส่งทั้งเล่ม (full) ไม่งั้นมันจะไม่ได้อะไรเลย
+  // จนกว่า rev จะไล่ทันเลขเก่า (รีวิว PR #33)
+  var full = !(after > 0) || after > maxRev;
+  if (full) after = 0;
+  var nowText = _isoText(now);
+  var applied = 0, rejected = [], touched = {};
+  (incoming || []).forEach(function (m) {
+    if (!m || typeof m !== 'object') return;
+    var g = String(m.gid == null ? '' : m.gid).trim();
+    if (!g || g.length > 64) return;
+    var cur = map[g] || null;
+    if (cur) touched[g] = true;
+    var cand = _ledgerCandidate(m, g, cur, nowText);
+    if (!cand) { rejected.push({ gid: g, reason: 'invalid' }); return; }
+    var base = Number(m.rev) || 0;
+    if (cur && base !== cur.rev) { rejected.push({ gid: g, reason: 'conflict' }); return; }
+    if (cur && _sameFields(cur, cand, _LEDGER_CONTENT)) return;      // ไม่มีอะไรเปลี่ยน
+    if (!isAdmin) { rejected.push({ gid: g, reason: 'auth' }); return; }
+    if (!cur && cand.deleted) return;                                   // ลบสิ่งที่กลางไม่เคยมี — ไม่ต้องเก็บ
+    cand.rev = ++maxRev;
+    cand.origin = cur ? cur.origin : String(installId == null ? '' : installId);
+    cand.updated_by = String(installId == null ? '' : installId);
+    cand.received_at = nowText;
+    map[g] = cand;
+    touched[g] = true;
+    applied++;
+  });
+  if (applied) {
+    var out = Object.keys(map).sort(function (a, b) { return map[a].rev - map[b].rev; }).map(function (k) {
+      var r = map[k];
+      return [_safeStr(r.gid), "'" + r.ts, "'" + r.ym, _safeStr(r.owner), r.kind, r.amount, _safeStr(r.note),
+              _safeStr(r.created_by), r.deleted, r.rev, _safeStr(r.origin), _safeStr(r.updated_by), "'" + r.received_at];
+    });
+    var last = sh.getLastRow();
+    if (last >= 2) sh.getRange(2, 1, last - 1, LEDGER_COLS.length).clearContent();
+    if (out.length) sh.getRange(2, 1, out.length, LEDGER_COLS.length).setValues(out);
+  }
+  var entries = Object.keys(map).filter(function (k) { return map[k].rev > after || touched[k]; })
+    .sort(function (a, b) { return map[a].rev - map[b].rev; })
+    .map(function (k) {
+      var r = map[k];
+      return { gid: r.gid, ts: r.ts, ym: r.ym, owner: r.owner, kind: r.kind, amount: r.amount, note: r.note,
+               created_by: r.created_by, deleted: r.deleted, rev: r.rev, origin: r.origin };
+    });
+  return { applied: applied, rejected: rejected, entries: entries, seq: maxRev, full: full };
+}
+
+/** v3.9.0: ยอดรับ/จ่ายของกระดาน (doGet) มาจากชีต ledger ที่เป็นของจริง — ไม่ใช่ตัวเลขที่แต่ละเครื่องรายงานในชีต counts
+ *  (เครื่อง A บันทึก แล้วเครื่อง B ลบ → ยอดที่ A เคยรายงานจะค้างในชีต counts จน A ส่งใหม่ ถ้า A ไม่กลับมาก็ค้างตลอด — รีวิว PR #33)
+ *  คืน {byKey: {'origin|display_name': {amount_in, amount_out}}, totals: {amount_in, amount_out}} · ชื่อที่แสดงหาจากชีต members */
+function _ledgerAmounts(ym) {
+  var map = _readLedger(_ledgerSheet());
+  var names = {};
+  var msh = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(MEMBERS_SHEET);
+  if (msh) {
+    var mm = _readMembers(msh);
+    Object.keys(mm).forEach(function (u) { if (mm[u].display_name) names[u] = mm[u].display_name; });
+  }
+  var byKey = {}, totals = { amount_in: 0, amount_out: 0 };
+  Object.keys(map).forEach(function (g) {
+    var r = map[g];
+    if (r.deleted || (ym && r.ym !== ym)) return;
+    var key = r.origin + '|' + (names[r.owner] || r.owner || '');
+    var p = byKey[key] || (byKey[key] = { install_id: r.origin, display_name: names[r.owner] || r.owner || '', amount_in: 0, amount_out: 0 });
+    var f = r.kind === 'out' ? 'amount_out' : 'amount_in';
+    p[f] = Math.round((p[f] + r.amount) * 100) / 100;
+    totals[f] = Math.round((totals[f] + r.amount) * 100) / 100;
+  });
+  return { byKey: byKey, totals: totals };
 }
 
 function _presenceSheet() {
@@ -290,15 +466,22 @@ function _doPostLocked(e) {
     var now = new Date();
     var stored = 0;
 
+    // ลายเซ็นที่สอง (asign) ด้วย ADMIN_TOKEN = เครื่องของ Super Admin → แก้ไดเรกทอรี/สมุดกองกลางได้
+    var asig = (e && e.parameter && e.parameter.asign) || '';
+    var adminReady = _adminReady();
+    var isAdmin = adminReady && !!asig && _safeEqual(asig, _signWith(body, ADMIN_TOKEN));
+
     // v3.7.0: ไดเรกทอรีสมาชิกกลาง — ก้อนนี้ไม่มี rows/users จึงไม่แตะตัวเลขและสถานะ
     if (data.kind === 'members' && Array.isArray(data.members)) {
-      // ลายเซ็นที่สอง (asign) ด้วย ADMIN_TOKEN = เครื่องของ Super Admin → แก้ไดเรกทอรีได้เต็ม
-      var asig = (e && e.parameter && e.parameter.asign) || '';
-      var adminReady = _adminReady();
-      var isAdmin = adminReady && !!asig && _safeEqual(asig, _signWith(body, ADMIN_TOKEN));
       var ms = _syncMembers(data.install_id, data.members, now, isAdmin);
       return _json({ ok: true, kind: 'members', applied: ms.applied, rejected: ms.rejected,
                      admin: isAdmin, admin_ready: adminReady, members: ms.members });
+    }
+    // v3.9.0: สมุดกองกลางกลาง — ตอบส่วนต่างตั้งแต่ rev ที่เครื่องนั้นเคยรับ (after) + รายการที่มันเพิ่งส่ง
+    if (data.kind === 'ledger' && Array.isArray(data.entries)) {
+      var ls = _syncLedger(data.install_id, data.entries, Number(data.after) || 0, now, isAdmin);
+      return _json({ ok: true, kind: 'ledger', applied: ls.applied, rejected: ls.rejected,
+                     admin: isAdmin, admin_ready: adminReady, entries: ls.entries, seq: ls.seq, full: ls.full });
     }
 
     // ตัวเลขรายเดือน: เฉพาะเมื่อก้อนนี้มี rows เป็นอาร์เรย์จริง ๆ
@@ -371,14 +554,25 @@ function _doGetLocked(e) {
           searches: 0, found: 0, notfound: 0, error: 0,
           files: 0, amount_in: 0, amount_out: 0
         });
-        var f = ['searches', 'found', 'notfound', 'error', 'files', 'amount_in', 'amount_out'];
-        var idx = [7, 8, 9, 10, 11, 12, 13];
+        // v3.9.0: ยอดเงินไม่อ่านจากชีต counts อีกแล้ว (ดู _ledgerAmounts) — คอลัมน์ amount_* ในชีตนี้เป็นของรุ่นก่อน
+        var f = ['searches', 'found', 'notfound', 'error', 'files'];
+        var idx = [7, 8, 9, 10, 11];
         for (var k = 0; k < f.length; k++) {
           var n = Number(v[idx[k]]) || 0;
           p[f[k]] += n; totals[f[k]] += n;
         }
       }
     }
+    var la = _ledgerAmounts(ym);
+    Object.keys(la.byKey).forEach(function (key) {
+      var a = la.byKey[key];
+      var q = byPerson[key] || (byPerson[key] = {
+        install_id: a.install_id, display_name: a.display_name,
+        searches: 0, found: 0, notfound: 0, error: 0, files: 0, amount_in: 0, amount_out: 0
+      });
+      q.amount_in = a.amount_in; q.amount_out = a.amount_out;
+    });
+    totals.amount_in = la.totals.amount_in; totals.amount_out = la.totals.amount_out;
     var rows = Object.keys(byPerson).map(function (k) { return byPerson[k]; });
     rows.forEach(function (r) { r.net = Math.round((r.amount_in - r.amount_out) * 100) / 100; });
     rows.sort(function (a, b) { return b.searches - a.searches; });
