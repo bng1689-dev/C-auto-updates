@@ -75,18 +75,18 @@ def main():
                   (now.isoformat(timespec="seconds"), now.strftime("%Y-%m"),
                    users["wichai"], "out", 40.0, "", 1))
 
-    # ── กองกลาง: ทุกคนเห็นยอดรวมชุดเดียวกัน ──
+    # ── กองกลาง: แอดมินเห็นทั้งองค์กร · v3.9.0: สมาชิกเห็นเฉพาะของตัวเองและทีม (ผู้ใช้สั่ง) ──
     a = admin.get("/api/live/board").get_json()
     b = m2.get("/api/live/board").get_json()
     check("สมาชิกธรรมดาเปิดกองกลางได้", "totals" in b, str(b)[:120])
     # v3.2.0: กองกลาง = สมุดบันทึกรับ/จ่ายเท่านั้น (รับ 100 จ่าย 40) — ไม่รวมผลค้น 17 รายการ
-    check("ยอดรวมกองกลางเท่ากันทุกคน (ไม่ใช่ของคนใดคนหนึ่ง) และเป็นสมุดบันทึกล้วน",
-          a["totals"] == b["totals"] and a["totals"] == {"in": 100.0, "out": 40.0, "net": 60.0, "entries": 2},
-          f'{a["totals"]} vs {b["totals"]}')
+    check("แอดมิน: ยอดรวมทั้งองค์กรเป็นสมุดบันทึกล้วน (scope=all)",
+          a["totals"] == {"in": 100.0, "out": 40.0, "net": 60.0, "entries": 2} and a["scope"] == "all", str(a["totals"]))
     check("มีข้อมูลกราฟรายวัน (daily)", len(a.get("daily") or []) >= 1)
-    check("สมาชิกไม่มีสิทธิ์ → ไม่เห็นรายคน/รายการ",
-          b["rows"] == [] and b["entries"] == [] and b["detail"] is False)
-    check("แอดมินเห็นรายคนที่มีรายการบันทึก (2 คน)", len(a["rows"]) == 2 and a["detail"] is True)
+    check("v3.9.0: สมาชิกนอกทีม (wichai) เห็นเฉพาะรายการของตัวเอง — จ่าย 40 · 1 รายการ · แก้ไม่ได้",
+          b["totals"] == {"in": 0.0, "out": 40.0, "net": -40.0, "entries": 1} and b["scope"] == "team"
+          and [r["username"] for r in b["rows"]] == ["wichai"] and len(b["entries"]) == 1 and b["can_edit"] is False, str(b)[:200])
+    check("แอดมินเห็นรายคนที่มีรายการบันทึก (2 คน) และแก้ได้", len(a["rows"]) == 2 and a["detail"] is True and a["can_edit"] is True)
 
     # ── Balance ตามขอบเขต + Real time ──
     s_admin = admin.get("/api/admin/billing/summary").get_json()

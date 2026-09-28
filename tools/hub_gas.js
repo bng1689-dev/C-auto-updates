@@ -27,6 +27,17 @@
  *  • ไม่รับการแก้ที่ทำให้ไม่เหลือ Super Admin ที่เปิดใช้งานเลย (reason "last_admin") — สองเครื่องปิดกันเองพร้อมกัน
  *    ก็ไม่ทำให้ทั้งองค์กรล็อกตัวเองออก
  *
+ * v3.9.0: เพิ่มชีต 'ledger' — สมุดกองกลางกลาง (เจ้าของโปรเจกต์สั่ง "แสดงค่าเดียวกันทุกเครื่อง") ทุกเครื่องเห็นรายการ
+ * รับ/จ่ายชุดเดียวกัน · ก้อน kind="ledger" ส่ง "รายการที่เครื่องนั้นเพิ่ม/ลบ" + after (rev สูงสุดที่เคยรับ) แล้วรับ
+ * ส่วนต่าง (rev > after) กลับไป — ไม่ใช่ทั้งเล่มทุกรอบ
+ *  • rev ของชีตนี้เป็นเลขเดียวทั้งเล่ม (+1 ทุกครั้งที่รับการแก้ใด ๆ) แต่ละแถวจดว่าถูกแก้ล่าสุดที่ rev ไหน
+ *    เครื่องลูกส่ง rev ที่ตนเห็นของแถวนั้นมา ไม่ตรง = conflict ของกลางชนะ (เหมือนสมาชิก)
+ *  • การเพิ่ม/ลบต้องเซ็นด้วย ADMIN_TOKEN (Super Admin เป็นผู้จัดการกองกลาง) — เครื่องที่มีแค่ HUB_TOKEN ดึงได้อย่างเดียว
+ *    (ไม่มีข้อยกเว้นชีตว่างเหมือนสมาชิก: ตั้ง ADMIN_TOKEN ก่อน ไม่งั้นรายการจะ "รอส่ง" อยู่ที่เครื่องผู้ดูแล)
+ *  • ลบ = แถวยังอยู่แต่ deleted=1 (ป้ายหลุมศพให้เครื่องอื่นลบตาม) · ยอดในชีต counts ของแต่ละเครื่องนับเฉพาะรายการ
+ *    ที่เครื่องนั้นบันทึกเอง (origin) จึงไม่ซ้ำ
+ *  • หมายเหตุเป็นข้อความที่ผู้ดูแลพิมพ์เอง — ห้ามพิมพ์เลขบัตร/ชื่อผู้ถูกค้น/ผลคดี
+ *
  * ** หลังวางโค้ดรุ่นนี้ทับ ต้องอัปเดตการ Deploy ให้ใช้โค้ดใหม่ ด้วยวิธีนี้เท่านั้น: **
  *    Deploy → Manage deployments → (อันที่ใช้อยู่) ไอคอนดินสอ ✏ → Version: New version → Deploy
  *    ห้ามใช้ "New deployment" เพราะจะได้ URL /exec อันใหม่ เครื่องลูกทุกเครื่องจะยังคุยกับ
@@ -64,6 +75,10 @@ var PRESENCE_SHEET = 'presence';
 var MEMBERS_SHEET = 'members';
 var MEMBER_COLS = ['username', 'display_name', 'role', 'permissions', 'active', 'password_hash', 'salt',
                    'rate_per_name', 'created_at', 'updated_at', 'deleted', 'rev', 'updated_by', 'received_at'];
+// v3.9.0: สมุดกองกลางกลาง — origin = เครื่องที่บันทึกรายการ (ไม่เปลี่ยนแม้เครื่องอื่นลบ) · updated_by = เครื่องที่แก้ล่าสุด
+var LEDGER_SHEET = 'ledger';
+var LEDGER_COLS = ['gid', 'ts', 'ym', 'owner', 'kind', 'amount', 'note', 'created_by', 'deleted', 'rev',
+                   'origin', 'updated_by', 'received_at'];
 
 /** ข้อความเวลาแบบ ISO — Sheet อาจแปลงข้อความวันที่เป็น Date ให้เอง ต้องคืนกลับเป็นข้อความรูปเดิมก่อนเทียบ */
 function _isoText(v) {
@@ -198,6 +213,106 @@ function _safeStr(v) {
   return /^[=+\-@]/.test(s) ? "'" + s : s;
 }
 
+// ──────────────── v3.9.0: สมุดกองกลางกลาง ────────────────
+/** เดือน 'YYYY-MM' — Sheet อาจแปลงข้อความนี้เป็น Date ให้เอง ต้องคืนกลับเป็นข้อความรูปเดิม */
+function _ymText(v) {
+  if (v instanceof Date && !isNaN(v)) return v.getFullYear() + '-' + ('0' + (v.getMonth() + 1)).slice(-2);
+  return String(v == null ? '' : v).slice(0, 7);
+}
+
+function _ledgerSheet() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var sh = ss.getSheetByName(LEDGER_SHEET);
+  if (!sh) {
+    sh = ss.insertSheet(LEDGER_SHEET);
+    sh.appendRow(LEDGER_COLS);
+    sh.setFrozenRows(1);
+  }
+  return sh;
+}
+
+function _readLedger(sh) {
+  var last = sh.getLastRow();
+  var vals = last >= 2 ? sh.getRange(2, 1, last - 1, LEDGER_COLS.length).getValues() : [];
+  var map = {};
+  vals.forEach(function (v) {
+    var g = String(v[0] == null ? '' : v[0]).trim();
+    if (!g) return;
+    map[g] = { gid: g, ts: _isoText(v[1]), ym: _ymText(v[2]), owner: String(v[3] == null ? '' : v[3]),
+               kind: String(v[4] || ''), amount: Number(v[5]) || 0, note: String(v[6] == null ? '' : v[6]),
+               created_by: String(v[7] == null ? '' : v[7]), deleted: Number(v[8]) ? 1 : 0, rev: Number(v[9]) || 0,
+               origin: String(v[10] == null ? '' : v[10]), updated_by: String(v[11] == null ? '' : v[11]),
+               received_at: _isoText(v[12]) };
+  });
+  return map;
+}
+
+/** แถวที่เครื่องลูกส่งมา → รูปแบบมาตรฐาน · คืน null ถ้ารูปแบบใช้ไม่ได้ (ประเภท/จำนวน/เดือน) */
+function _ledgerCandidate(m, gid, cur, nowText) {
+  var kind = (m.kind === 'in' || m.kind === 'out') ? m.kind : '';
+  var amount = Math.round((Number(m.amount) || 0) * 100) / 100;
+  var ts = _isoText(m.ts).slice(0, 19) || (cur && cur.ts) || nowText;
+  var ym = _ymText(m.ym) || ts.slice(0, 7);
+  if (!kind || !(amount > 0) || !isFinite(amount) || !/^\d{4}-\d{2}$/.test(ym)) return null;
+  return {
+    gid: gid, ts: ts, ym: ym, owner: String(m.owner == null ? '' : m.owner).slice(0, 64), kind: kind, amount: amount,
+    note: String(m.note == null ? '' : m.note).slice(0, 300),
+    created_by: String(m.created_by == null ? '' : m.created_by).slice(0, 64) || (cur && cur.created_by) || '',
+    deleted: Number(m.deleted) ? 1 : 0
+  };
+}
+var _LEDGER_CONTENT = ['ts', 'ym', 'owner', 'kind', 'amount', 'note', 'deleted'];
+
+/** v3.9.0: รับรายการที่เครื่องลูกเพิ่ม/ลบ → ตรวจ rev / สิทธิ์ → คืนส่วนต่าง (rev > after) + รายการที่เครื่องนั้นเพิ่งส่ง
+ *  isAdmin = ก้อนนี้เซ็นด้วย ADMIN_TOKEN ถูกต้อง · ไม่ใช่ = ดึงได้อย่างเดียว (ทุกการแก้ถูกปัดตก reason "auth") */
+function _syncLedger(installId, incoming, after, now, isAdmin) {
+  var sh = _ledgerSheet();
+  var map = _readLedger(sh);
+  var maxRev = 0;
+  Object.keys(map).forEach(function (k) { if (map[k].rev > maxRev) maxRev = map[k].rev; });
+  var nowText = _isoText(now);
+  var applied = 0, rejected = [], touched = {};
+  (incoming || []).forEach(function (m) {
+    if (!m || typeof m !== 'object') return;
+    var g = String(m.gid == null ? '' : m.gid).trim();
+    if (!g || g.length > 64) return;
+    var cur = map[g] || null;
+    if (cur) touched[g] = true;
+    var cand = _ledgerCandidate(m, g, cur, nowText);
+    if (!cand) { rejected.push({ gid: g, reason: 'invalid' }); return; }
+    var base = Number(m.rev) || 0;
+    if (cur && base !== cur.rev) { rejected.push({ gid: g, reason: 'conflict' }); return; }
+    if (cur && _sameFields(cur, cand, _LEDGER_CONTENT)) return;      // ไม่มีอะไรเปลี่ยน
+    if (!isAdmin) { rejected.push({ gid: g, reason: 'auth' }); return; }
+    if (!cur && cand.deleted) return;                                   // ลบสิ่งที่กลางไม่เคยมี — ไม่ต้องเก็บ
+    cand.rev = ++maxRev;
+    cand.origin = cur ? cur.origin : String(installId == null ? '' : installId);
+    cand.updated_by = String(installId == null ? '' : installId);
+    cand.received_at = nowText;
+    map[g] = cand;
+    touched[g] = true;
+    applied++;
+  });
+  if (applied) {
+    var out = Object.keys(map).sort(function (a, b) { return map[a].rev - map[b].rev; }).map(function (k) {
+      var r = map[k];
+      return [_safeStr(r.gid), "'" + r.ts, "'" + r.ym, _safeStr(r.owner), r.kind, r.amount, _safeStr(r.note),
+              _safeStr(r.created_by), r.deleted, r.rev, _safeStr(r.origin), _safeStr(r.updated_by), "'" + r.received_at];
+    });
+    var last = sh.getLastRow();
+    if (last >= 2) sh.getRange(2, 1, last - 1, LEDGER_COLS.length).clearContent();
+    if (out.length) sh.getRange(2, 1, out.length, LEDGER_COLS.length).setValues(out);
+  }
+  var entries = Object.keys(map).filter(function (k) { return map[k].rev > after || touched[k]; })
+    .sort(function (a, b) { return map[a].rev - map[b].rev; })
+    .map(function (k) {
+      var r = map[k];
+      return { gid: r.gid, ts: r.ts, ym: r.ym, owner: r.owner, kind: r.kind, amount: r.amount, note: r.note,
+               created_by: r.created_by, deleted: r.deleted, rev: r.rev, origin: r.origin };
+    });
+  return { applied: applied, rejected: rejected, entries: entries, seq: maxRev };
+}
+
 function _presenceSheet() {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
   var sh = ss.getSheetByName(PRESENCE_SHEET);
@@ -290,15 +405,22 @@ function _doPostLocked(e) {
     var now = new Date();
     var stored = 0;
 
+    // ลายเซ็นที่สอง (asign) ด้วย ADMIN_TOKEN = เครื่องของ Super Admin → แก้ไดเรกทอรี/สมุดกองกลางได้
+    var asig = (e && e.parameter && e.parameter.asign) || '';
+    var adminReady = _adminReady();
+    var isAdmin = adminReady && !!asig && _safeEqual(asig, _signWith(body, ADMIN_TOKEN));
+
     // v3.7.0: ไดเรกทอรีสมาชิกกลาง — ก้อนนี้ไม่มี rows/users จึงไม่แตะตัวเลขและสถานะ
     if (data.kind === 'members' && Array.isArray(data.members)) {
-      // ลายเซ็นที่สอง (asign) ด้วย ADMIN_TOKEN = เครื่องของ Super Admin → แก้ไดเรกทอรีได้เต็ม
-      var asig = (e && e.parameter && e.parameter.asign) || '';
-      var adminReady = _adminReady();
-      var isAdmin = adminReady && !!asig && _safeEqual(asig, _signWith(body, ADMIN_TOKEN));
       var ms = _syncMembers(data.install_id, data.members, now, isAdmin);
       return _json({ ok: true, kind: 'members', applied: ms.applied, rejected: ms.rejected,
                      admin: isAdmin, admin_ready: adminReady, members: ms.members });
+    }
+    // v3.9.0: สมุดกองกลางกลาง — ตอบส่วนต่างตั้งแต่ rev ที่เครื่องนั้นเคยรับ (after) + รายการที่มันเพิ่งส่ง
+    if (data.kind === 'ledger' && Array.isArray(data.entries)) {
+      var ls = _syncLedger(data.install_id, data.entries, Number(data.after) || 0, now, isAdmin);
+      return _json({ ok: true, kind: 'ledger', applied: ls.applied, rejected: ls.rejected,
+                     admin: isAdmin, admin_ready: adminReady, entries: ls.entries, seq: ls.seq });
     }
 
     // ตัวเลขรายเดือน: เฉพาะเมื่อก้อนนี้มี rows เป็นอาร์เรย์จริง ๆ
