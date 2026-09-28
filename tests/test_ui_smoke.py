@@ -56,6 +56,16 @@ def seed_history():
                      outcome, 1 if outcome == "found" else 0, "", 1, f"h{d}-{i}", 0, 1))
 
 
+def logout(page):
+    """กดออกจากระบบแล้ว 'รอให้หน้า reload จริง' ก่อนทำขั้นต่อไป
+    v3.8.1: เดิมกดแล้วรอแค่ #screen-auth โผล่ — บนหน้าเก่า poll ที่ได้ 401 อาจโชว์หน้าเข้าสู่ระบบก่อน location.reload()
+    ทำให้ขั้นต่อไป (เช่น กรอกฟอร์มลืมรหัสผ่าน) ถูก reload ทับกลางคันแล้วล้มเป็นบางครั้ง (CI ล้มจริง)"""
+    page.evaluate("window.__smokeDoc = 1")
+    page.click("#btnLogout")
+    page.wait_for_function("typeof window.__smokeDoc === 'undefined'", timeout=15000)   # เอกสารใหม่หลัง reload
+    page.wait_for_selector("#screen-auth:not(.hidden)", timeout=15000)
+
+
 def main():
     server.app.config["TESTING"] = False
     th = threading.Thread(
@@ -362,7 +372,7 @@ def main():
                                        passcode2:'24681357'})});
                return (await r.json()).ok === true; }""")
         check("ตั้ง PASSCODE ได้", ok)
-        page.click("#btnLogout")
+        logout(page)
         page.wait_for_selector("#screen-auth:not(.hidden)", timeout=15000)
         page.wait_for_selector("#authMethodBar:not(.hidden)", timeout=15000)
         page.click('#authMethodBar [data-method="passcode"]')
@@ -375,7 +385,7 @@ def main():
         check("เลือก user แล้วปลดล็อกด้วย PASSCODE ของคนนั้นได้", True)
 
         # ── ออกจากระบบ → เข้าใหม่ด้วยรหัสผ่านปกติ ──
-        page.click("#btnLogout")
+        logout(page)
         page.wait_for_selector("#screen-auth:not(.hidden)", timeout=15000)
         # v3.6.1: กดออกทันทีหลังปลดล็อก (หน้าแรกยังโหลดค้าง) — คำตอบที่มาทีหลัง /api/logout เคยคืนคุกกี้
         # ที่ยังใช้ได้ให้เบราว์เซอร์ ทำให้รีโหลดแล้วยังอยู่ในระบบ (CI ล้มที่บรรทัดบนเพราะเหตุนี้)
@@ -393,7 +403,7 @@ def main():
         # ── v3.6.4: ลืมรหัสผ่าน (สมาชิก) — ยืนยันด้วยชื่อที่ใช้เข้าเว็บ CRIMES ที่โปรแกรมจดไว้จากรอบค้น ──
         m9 = next(u for u in db.list_users() if u["username"] == "member9")
         db.remember_crimes_account(m9["id"], "Somchai.C")     # ชื่อที่ worker อ่านจากหน้าเว็บ CRIMES ตอนคนนี้ค้น
-        page.click("#btnLogout")
+        logout(page)
         page.wait_for_selector("#screen-auth:not(.hidden)", timeout=15000)
         page.wait_for_selector("#authForgotLink:not(.hidden)", timeout=15000)
         check("หน้าเข้าสู่ระบบมีลิงก์ 'ลืมรหัสผ่าน?' และไม่มีกล่องกู้ Super Admin (v3.6.3) แล้ว",
@@ -419,7 +429,7 @@ def main():
         check("ชื่อ CRIMES ตรง (ไม่สนตัวพิมพ์/ช่องว่าง) → ตั้งรหัสใหม่และเข้าสู่ระบบเป็นสมาชิกคนนั้น",
               me == "member9", str(me))
         page.wait_for_timeout(700)
-        page.click("#btnLogout")
+        logout(page)
         page.wait_for_selector("#screen-auth:not(.hidden)", timeout=15000)
         page.wait_for_selector("#authForgotLink:not(.hidden)", timeout=15000)
         page.click("#authForgotLink")
