@@ -88,6 +88,16 @@ def push_raw(entries, admin_token=ADMIN, install="raw", after=0):
     return hub.sync_ledger(URL, TOKEN, install, VER, entries, after=after, admin_token=admin_token)
 
 
+def board_raw(ym=YM):
+    """กระดานของศูนย์กลาง (doGet) — ยอดเงินต้องมาจากชีต ledger ไม่ใช่ตัวเลขที่เครื่องรายงาน"""
+    req = {"method": "GET", "parameter": {"ym": ym, "sign": hub.sign(f"board:{ym}".encode("utf-8"), TOKEN)}}
+    r = subprocess.run(["node", str(HERE / "gas_harness.js"), str(STATE), TOKEN, ADMIN],
+                       input=json.dumps(req), capture_output=True, text=True, timeout=60)
+    if r.returncode:
+        raise RuntimeError("harness: " + r.stderr[-300:])
+    return json.loads(r.stdout)
+
+
 def local_rows():
     with db.get_conn() as c:
         return {r["gid"]: dict(r) for r in c.execute("SELECT * FROM ledger ORDER BY id").fetchall()}
@@ -141,17 +151,15 @@ def main():
     check("ซิงก์ซ้ำโดยไม่มีอะไรเปลี่ยน → กลางตอบส่วนต่างว่าง (ไม่ส่งทั้งเล่มทุกรอบ)",
           res.get("ok") and res.get("applied") == 0 and res.get("entries") == [] and server._ledger_last.get("count") == 0, str(res)[:200])
 
-    print("\n── ก้อน counts นับยอดเฉพาะรายการที่เครื่องนี้บันทึก ──")
-    with db.get_conn() as conn:
-        conn.execute("INSERT INTO ledger(ts,ym,user_id,kind,amount,note,created_by,gid,owner,origin,deleted,hub_rev,sync_dirty)"
-                     " VALUES(?,?,?,?,?,?,?,?,?,?,0,9,0)",
-                     (datetime.now().isoformat(timespec="seconds"), YM, users["somchai"], "in", 1000.0, "", 0, "foreign-gid", "somchai", "machine-other"))
-    rows = hub.build_payload(YM, install_a, VER)["rows"]
-    tot_in = sum(r["amount_in"] for r in rows)
-    check("รายการที่มาจากเครื่องอื่น (origin ต่างกัน) ไม่ถูกนับในก้อน counts ของเครื่องนี้ (รับ 350.5 ไม่ใช่ 1350.5)",
-          round(tot_in, 2) == 350.5 and all(set(r) == set(hub.ALLOWED_FIELDS) for r in rows), str(rows))
-    with db.get_conn() as conn:
-        conn.execute("DELETE FROM ledger WHERE gid='foreign-gid'")
+    print("\n── เงินไม่ไปทางก้อน counts อีกแล้ว — กระดานศูนย์กลางคิดยอดจากชีต ledger ──")
+    payload = hub.build_payload(YM, install_a, VER)
+    check("ก้อน counts ไม่มี amount_in/amount_out (ยอดที่เครื่องรายงานจะค้างหลังเครื่องอื่นลบ — ตัดออกทั้งทาง)",
+          "amount_in" not in hub.ALLOWED_FIELDS and all("amount_in" not in r and "amount_out" not in r for r in payload["rows"]))
+    bd = board_raw()
+    check("กระดาน (doGet): ยอดรวมจากชีต ledger — รับ 350.5 จ่าย 40 · แยกรายคนด้วยชื่อที่แสดงจากไดเรกทอรี + เครื่องที่บันทึก",
+          bd.get("ok") and bd["totals"]["amount_in"] == 350.5 and bd["totals"]["amount_out"] == 40 and bd["totals"]["net"] == 310.5
+          and {(r["display_name"], r["install_id"], r["amount_in"], r["amount_out"]) for r in bd["rows"]}
+          == {("สมชาย", install_a, 100, 0), ("วิชัย", install_a, 0, 40), ("แอดมิน", install_a, 250.5, 0)}, str(bd)[:400])
 
     print("\n── เครื่อง B เข้าร่วม → เห็นสมุดเล่มเดียวกัน · สมาชิกเห็นเฉพาะตัวเองและทีม ──")
     out = machine_b([
@@ -224,22 +232,33 @@ def main():
     check("A: ซิงก์แล้วได้รายการจาก B มา (สร้าง 1 · หมายเหตุ 'ค่ากาแฟ' · เจ้าของ somchai) → จ่ายรวม 70",
           (res.get("summary") or {}).get("created") == [g_out30] and b["totals"]["out"] == 70.0
           and any(e["note"] == "ค่ากาแฟ" and e["username"] == "somchai" for e in b["entries"]), str(res.get("summary")))
-    check("A: รายการจาก B ไม่ถูกนับในก้อน counts ของ A (origin ต่างกัน)",
-          round(sum(r["amount_out"] for r in hub.build_payload(YM, install_a, VER)["rows"]), 2) == 40.0)
+    bd = board_raw()
+    check("กระดานศูนย์กลาง: รายการของ B ขึ้นเป็นแถวของเครื่อง B · จ่ายรวม 70",
+          bd["totals"]["amount_out"] == 70 and any(r["display_name"] == "สมชาย" and r["install_id"] != install_a and r["amount_out"] == 30 for r in bd["rows"]), str(bd)[:400])
+
+    print("\n── B ลบรายการที่ A บันทึก → กระดานศูนย์กลางลดทันที โดย A ไม่ต้องส่งอะไรอีก ──")
+    out = machine_b([{"op": "login", "u": "admin1", "p": "secret9"}, {"op": "ledger_del", "gid": g_out40}, {"op": "ledger_sync"}])
+    bd = board_raw()
+    check("B ลบ 40 ของ wichai (origin=A) แล้วซิงก์ → กระดาน: จ่ายรวม 30 ทันที (ไม่ค้าง 40 ที่ A เคยรายงาน)",
+          out["ledger_del"][0] == 200 and out["ledger_sync"]["ok"] and not out["ledger_sync"]["rejected"]
+          and bd["totals"]["amount_out"] == 30 and not any(r["display_name"] == "วิชัย" and r["amount_out"] for r in bd["rows"]), str(bd["totals"]))
+    res = server._ledger_sync_now("test")
+    check("A: ได้ป้ายหลุมศพมา → รายการหายจากยอดของ A ด้วย", (res.get("summary") or {}).get("deleted") == [g_out40]
+          and c.get("/api/live/board").get_json()["totals"]["out"] == 30.0, str(res.get("summary")))
 
     print("\n── ลบที่ A → หายที่ B · ลบก่อนเคยขึ้นกลาง = ทิ้งจริง ──")
     lid = local_rows()[g_in100]["id"]
     check("A: ลบรายการ 100 (กลางรู้จักแล้ว) → เก็บเป็นป้ายหลุมศพ deleted=1 รอส่ง",
           c.delete(f"/api/admin/ledger/{lid}").status_code == 200 and local_rows()[g_in100]["deleted"] == 1 and local_rows()[g_in100]["sync_dirty"] == 1)
     b = c.get("/api/live/board").get_json()
-    check("A: ยอด/รายการ/กราฟไม่นับที่ลบแล้ว (รับ 250.5 · 3 รายการ)",
-          b["totals"] == {"in": 250.5, "out": 70.0, "net": 180.5, "entries": 3} and all(e["gid"] != g_in100 for e in b["entries"]), str(b["totals"]))
+    check("A: ยอด/รายการ/กราฟไม่นับที่ลบแล้ว (รับ 250.5 · 2 รายการ)",
+          b["totals"] == {"in": 250.5, "out": 30.0, "net": 220.5, "entries": 2} and all(e["gid"] != g_in100 for e in b["entries"]), str(b["totals"]))
     res = server._ledger_sync_now("test")
     check("A: ซิงก์ → กลางจดว่าลบ (rev เพิ่ม) · ไม่ค้าง", res.get("ok") and res.get("applied") == 1 and hub_ledger()[g_in100]["deleted"] == 1 and db.count_pending_ledger() == 0)
     check("A: ลบซ้ำ → 404", c.delete(f"/api/admin/ledger/{lid}").status_code == 404)
     out = machine_b([{"op": "ledger_sync"}, {"op": "login", "u": "admin1", "p": "secret9"}, {"op": "board"}, {"op": "ledger"}])
     check("B: ซิงก์ → รายการ 100 ถูกลบตาม (summary.deleted) · ยอดตรงกับ A",
-          out["ledger_sync"]["summary"]["deleted"] == [g_in100] and out["board"][1]["totals"] == {"in": 250.5, "out": 70.0, "net": 180.5, "entries": 3}, str(out["ledger_sync"]["summary"]))
+          out["ledger_sync"]["summary"]["deleted"] == [g_in100] and out["board"][1]["totals"] == {"in": 250.5, "out": 30.0, "net": 220.5, "entries": 2}, str(out["ledger_sync"]["summary"]))
     r = c.post("/api/admin/ledger", json={"user_id": users["admin1"], "kind": "in", "amount": 7})
     tmp = r.get_json()["id"]
     check("A: บันทึกแล้วลบทันที (ยังไม่เคยขึ้นกลาง) → หายจากเครื่องจริง ไม่ค้างส่ง",
@@ -247,17 +266,18 @@ def main():
     check("กลาง: ไม่รู้จักรายการนั้นเลย", len(hub_ledger()) == 4)
 
     print("\n── ลำดับตัดสินโดยศูนย์กลาง (rev) · รหัสร่วมแก้ไม่ได้ · รูปแบบผิด ──")
-    cur = hub_ledger()[g_out40]
+    g_in250 = next(g for g, e in hub_ledger().items() if e["owner"] == "admin1" and not e["deleted"])
+    cur = hub_ledger()[g_in250]
     res = push_raw([dict(cur, amount=999, rev=cur["rev"] - 1)])
     check("rev เก่า → rejected conflict · กลางไม่เปลี่ยน · ตอบรายการรุ่นปัจจุบันกลับมาให้ทับ",
-          res.get("rejected") == [{"gid": g_out40, "reason": "conflict"}] and hub_ledger()[g_out40]["amount"] == 40
-          and any(e["gid"] == g_out40 and e["amount"] == 40 for e in res.get("entries", [])), str(res)[:200])
+          res.get("rejected") == [{"gid": g_in250, "reason": "conflict"}] and hub_ledger()[g_in250]["amount"] == 250.5
+          and any(e["gid"] == g_in250 and e["amount"] == 250.5 for e in res.get("entries", [])), str(res)[:200])
     res = push_raw([{"gid": "shared-token-entry", "ts": "2026-01-01T00:00:00", "ym": "2026-01", "owner": "somchai", "kind": "in", "amount": 1, "note": "", "created_by": "x", "deleted": 0, "rev": 0}], admin_token=None)
     check("รหัสร่วม (ไม่มีรหัสผู้ดูแล) เพิ่มรายการ → rejected auth", res.get("rejected") == [{"gid": "shared-token-entry", "reason": "auth"}] and "shared-token-entry" not in hub_ledger())
     res = push_raw([dict(cur, deleted=1)], admin_token=None)
-    check("รหัสร่วมลบรายการ → rejected auth", res.get("rejected") == [{"gid": g_out40, "reason": "auth"}] and hub_ledger()[g_out40]["deleted"] == 0)
+    check("รหัสร่วมลบรายการ → rejected auth", res.get("rejected") == [{"gid": g_in250, "reason": "auth"}] and hub_ledger()[g_in250]["deleted"] == 0)
     res = push_raw([dict(cur, amount=1)], admin_token="wrong-admin-token-xxxxxxxx")
-    check("รหัสผู้ดูแลผิด → admin=False · rejected auth", res.get("admin") is False and res.get("rejected") == [{"gid": g_out40, "reason": "auth"}])
+    check("รหัสผู้ดูแลผิด → admin=False · rejected auth", res.get("admin") is False and res.get("rejected") == [{"gid": g_in250, "reason": "auth"}])
     res = push_raw([{"gid": "bad-1", "ts": "", "ym": "2026-01", "owner": "x", "kind": "in", "amount": 0, "rev": 0},
                     {"gid": "bad-2", "ts": "", "ym": "2026-01", "owner": "x", "kind": "gift", "amount": 5, "rev": 0},
                     {"gid": "bad-3", "ts": "", "ym": "jan", "owner": "x", "kind": "in", "amount": 5, "rev": 0}])
@@ -265,9 +285,39 @@ def main():
           sorted(x["reason"] for x in res.get("rejected", [])) == ["invalid"] * 3 and len(hub_ledger()) == 4, str(res.get("rejected")))
     body = hub.build_ledger_payload("raw", VER, [dict(cur, amount=1)], after=0)
     res = raw_post(body, admin_token=ADMIN, script_admin="")
-    check("สคริปต์ยังไม่ตั้ง ADMIN_TOKEN → admin_ready=False ปัดตกทั้งที่ลายเซ็นถูก", res.get("admin_ready") is False and res.get("rejected") == [{"gid": g_out40, "reason": "auth"}])
+    check("สคริปต์ยังไม่ตั้ง ADMIN_TOKEN → admin_ready=False ปัดตกทั้งที่ลายเซ็นถูก", res.get("admin_ready") is False and res.get("rejected") == [{"gid": g_in250, "reason": "auth"}])
     res = push_raw([], after=2)
-    check("after=2 → ได้เฉพาะรายการที่ rev>2 (ส่วนต่าง) · seq = rev สูงสุด", all(e["rev"] > 2 for e in res["entries"]) and len(res["entries"]) == 3 and res["seq"] == 5, str(res)[:200])
+    check("after=2 → ได้เฉพาะรายการที่ rev>2 (ส่วนต่าง) · seq = rev สูงสุด · ไม่ใช่ full",
+          all(e["rev"] > 2 for e in res["entries"]) and len(res["entries"]) == 4 and res["seq"] == 6 and res["full"] is False, str(res)[:200])
+
+    print("\n── เลข rev ค้างจากศูนย์กลางเก่า (รีวิว PR #33) ──")
+    res = push_raw([], after=999)
+    check("after เกินกว่าที่กลางเคยนับ → กลางส่งทั้งเล่ม (full=True · ครบ 4 รายการ) · seq=6",
+          res["full"] is True and len(res["entries"]) == 4 and res["seq"] == 6, str(res)[:200])
+    db.set_meta(server.LEDGER_SEQ_KEY, 999)
+    res = server._ledger_sync_now("test")
+    check("A จำเลข 999 อยู่ → ซิงก์แล้วจดเลขจริงของกลาง (6) แม้ต่ำกว่าเดิม · ไม่มีอะไรถูกติดธงส่งใหม่ (ทุกรายการยังอยู่บนกลาง)",
+          res.get("ok") and int(db.get_meta(server.LEDGER_SEQ_KEY)) == 6 and (res.get("summary") or {}).get("reflagged") == []
+          and db.count_pending_ledger() == 0, f"{db.get_meta(server.LEDGER_SEQ_KEY)} {res.get('summary')}")
+    r = c.post("/api/hub/config", json={"url": "https://script.google.com/macros/s/OTHER/exec"})
+    check("เปลี่ยน URL ศูนย์กลาง → ลืมเลขที่จำ (0)", r.status_code == 200 and int(db.get_meta(server.LEDGER_SEQ_KEY)) == 0)
+    c.post("/api/hub/config", json={"url": URL})            # กลับมาเล่มเดิม (นับเป็นเปลี่ยนอีกครั้ง → 0)
+    db.set_meta(server.LEDGER_SEQ_KEY, 6)
+    r = c.post("/api/hub/config", json={"url": URL, "interval_min": 2})
+    check("บันทึกตั้งค่าโดย URL เท่าเดิม → เลขไม่ถูกลืม", r.status_code == 200 and int(db.get_meta(server.LEDGER_SEQ_KEY)) == 6)
+    # ชีต ledger ถูกสร้างใหม่ (ว่าง) — เหมือนผู้ดูแลตั้งศูนย์กลางใหม่: รายการที่ A เคยซิงก์ต้องถูกส่งขึ้นใหม่ ไม่ใช่หายไปเฉย ๆ
+    st = json.loads(STATE.read_text(encoding="utf-8"))
+    st["sheets"].pop("ledger", None)
+    STATE.write_text(json.dumps(st), encoding="utf-8")
+    n_live = len([rw for rw in local_rows().values() if not rw["deleted"]])
+    res = server._ledger_sync_now("test")
+    s = res.get("summary") or {}
+    check("ชีตว่าง (กลางเป็นคนละเล่ม) → รายการที่เคยซิงก์ถูกติดธงส่งใหม่ (ป้ายหลุมศพเก่าทิ้ง) · เลขจด 0",
+          res.get("ok") and res.get("full") is True and len(s.get("reflagged", [])) == n_live and db.count_pending_ledger() == n_live
+          and int(db.get_meta(server.LEDGER_SEQ_KEY)) == 0 and all(rw["deleted"] == 0 for rw in local_rows().values()), str(s))
+    res = server._ledger_sync_now("test")
+    check("รอบถัดไป → ขึ้นกลางเล่มใหม่ครบ ไม่ค้าง", res.get("ok") and res.get("applied") == n_live and db.count_pending_ledger() == 0
+          and len(hub_ledger()) == n_live, str(res)[:200])
 
     print("\n── สคริปต์รุ่นเก่า · รายการเก่าก่อน 3.9.0 ──")
     real_post = server.hub._post

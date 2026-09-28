@@ -34,8 +34,9 @@
  *    เครื่องลูกส่ง rev ที่ตนเห็นของแถวนั้นมา ไม่ตรง = conflict ของกลางชนะ (เหมือนสมาชิก)
  *  • การเพิ่ม/ลบต้องเซ็นด้วย ADMIN_TOKEN (Super Admin เป็นผู้จัดการกองกลาง) — เครื่องที่มีแค่ HUB_TOKEN ดึงได้อย่างเดียว
  *    (ไม่มีข้อยกเว้นชีตว่างเหมือนสมาชิก: ตั้ง ADMIN_TOKEN ก่อน ไม่งั้นรายการจะ "รอส่ง" อยู่ที่เครื่องผู้ดูแล)
- *  • ลบ = แถวยังอยู่แต่ deleted=1 (ป้ายหลุมศพให้เครื่องอื่นลบตาม) · ยอดในชีต counts ของแต่ละเครื่องนับเฉพาะรายการ
- *    ที่เครื่องนั้นบันทึกเอง (origin) จึงไม่ซ้ำ
+ *  • ลบ = แถวยังอยู่แต่ deleted=1 (ป้ายหลุมศพให้เครื่องอื่นลบตาม) · ยอดรับ/จ่ายของกระดาน (doGet) คิดจากชีตนี้
+ *    (ของจริง ไม่ซ้ำ ไม่ค้าง) — โปรแกรม 3.9.0 ไม่ส่งยอดเงินมาในก้อน counts อีกแล้ว คอลัมน์ amount_* ในชีต counts จึงว่าง
+ *  • เครื่องที่ส่ง after เกินกว่า rev สูงสุดของเล่มนี้ (เปลี่ยนศูนย์กลาง/ชีตถูกสร้างใหม่) ได้ทั้งเล่มกลับไป (full)
  *  • หมายเหตุเป็นข้อความที่ผู้ดูแลพิมพ์เอง — ห้ามพิมพ์เลขบัตร/ชื่อผู้ถูกค้น/ผลคดี
  *
  * ** หลังวางโค้ดรุ่นนี้ทับ ต้องอัปเดตการ Deploy ให้ใช้โค้ดใหม่ ด้วยวิธีนี้เท่านั้น: **
@@ -270,6 +271,10 @@ function _syncLedger(installId, incoming, after, now, isAdmin) {
   var map = _readLedger(sh);
   var maxRev = 0;
   Object.keys(map).forEach(function (k) { if (map[k].rev > maxRev) maxRev = map[k].rev; });
+  // after เกินกว่าที่เล่มนี้เคยนับ = เครื่องนั้นจำเลขจากศูนย์กลางเก่า/ชีตที่ถูกสร้างใหม่ → ส่งทั้งเล่ม (full) ไม่งั้นมันจะไม่ได้อะไรเลย
+  // จนกว่า rev จะไล่ทันเลขเก่า (รีวิว PR #33)
+  var full = !(after > 0) || after > maxRev;
+  if (full) after = 0;
   var nowText = _isoText(now);
   var applied = 0, rejected = [], touched = {};
   (incoming || []).forEach(function (m) {
@@ -310,7 +315,31 @@ function _syncLedger(installId, incoming, after, now, isAdmin) {
       return { gid: r.gid, ts: r.ts, ym: r.ym, owner: r.owner, kind: r.kind, amount: r.amount, note: r.note,
                created_by: r.created_by, deleted: r.deleted, rev: r.rev, origin: r.origin };
     });
-  return { applied: applied, rejected: rejected, entries: entries, seq: maxRev };
+  return { applied: applied, rejected: rejected, entries: entries, seq: maxRev, full: full };
+}
+
+/** v3.9.0: ยอดรับ/จ่ายของกระดาน (doGet) มาจากชีต ledger ที่เป็นของจริง — ไม่ใช่ตัวเลขที่แต่ละเครื่องรายงานในชีต counts
+ *  (เครื่อง A บันทึก แล้วเครื่อง B ลบ → ยอดที่ A เคยรายงานจะค้างในชีต counts จน A ส่งใหม่ ถ้า A ไม่กลับมาก็ค้างตลอด — รีวิว PR #33)
+ *  คืน {byKey: {'origin|display_name': {amount_in, amount_out}}, totals: {amount_in, amount_out}} · ชื่อที่แสดงหาจากชีต members */
+function _ledgerAmounts(ym) {
+  var map = _readLedger(_ledgerSheet());
+  var names = {};
+  var msh = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(MEMBERS_SHEET);
+  if (msh) {
+    var mm = _readMembers(msh);
+    Object.keys(mm).forEach(function (u) { if (mm[u].display_name) names[u] = mm[u].display_name; });
+  }
+  var byKey = {}, totals = { amount_in: 0, amount_out: 0 };
+  Object.keys(map).forEach(function (g) {
+    var r = map[g];
+    if (r.deleted || (ym && r.ym !== ym)) return;
+    var key = r.origin + '|' + (names[r.owner] || r.owner || '');
+    var p = byKey[key] || (byKey[key] = { install_id: r.origin, display_name: names[r.owner] || r.owner || '', amount_in: 0, amount_out: 0 });
+    var f = r.kind === 'out' ? 'amount_out' : 'amount_in';
+    p[f] = Math.round((p[f] + r.amount) * 100) / 100;
+    totals[f] = Math.round((totals[f] + r.amount) * 100) / 100;
+  });
+  return { byKey: byKey, totals: totals };
 }
 
 function _presenceSheet() {
@@ -420,7 +449,7 @@ function _doPostLocked(e) {
     if (data.kind === 'ledger' && Array.isArray(data.entries)) {
       var ls = _syncLedger(data.install_id, data.entries, Number(data.after) || 0, now, isAdmin);
       return _json({ ok: true, kind: 'ledger', applied: ls.applied, rejected: ls.rejected,
-                     admin: isAdmin, admin_ready: adminReady, entries: ls.entries, seq: ls.seq });
+                     admin: isAdmin, admin_ready: adminReady, entries: ls.entries, seq: ls.seq, full: ls.full });
     }
 
     // ตัวเลขรายเดือน: เฉพาะเมื่อก้อนนี้มี rows เป็นอาร์เรย์จริง ๆ
@@ -493,14 +522,25 @@ function _doGetLocked(e) {
           searches: 0, found: 0, notfound: 0, error: 0,
           files: 0, amount_in: 0, amount_out: 0
         });
-        var f = ['searches', 'found', 'notfound', 'error', 'files', 'amount_in', 'amount_out'];
-        var idx = [7, 8, 9, 10, 11, 12, 13];
+        // v3.9.0: ยอดเงินไม่อ่านจากชีต counts อีกแล้ว (ดู _ledgerAmounts) — คอลัมน์ amount_* ในชีตนี้เป็นของรุ่นก่อน
+        var f = ['searches', 'found', 'notfound', 'error', 'files'];
+        var idx = [7, 8, 9, 10, 11];
         for (var k = 0; k < f.length; k++) {
           var n = Number(v[idx[k]]) || 0;
           p[f[k]] += n; totals[f[k]] += n;
         }
       }
     }
+    var la = _ledgerAmounts(ym);
+    Object.keys(la.byKey).forEach(function (key) {
+      var a = la.byKey[key];
+      var q = byPerson[key] || (byPerson[key] = {
+        install_id: a.install_id, display_name: a.display_name,
+        searches: 0, found: 0, notfound: 0, error: 0, files: 0, amount_in: 0, amount_out: 0
+      });
+      q.amount_in = a.amount_in; q.amount_out = a.amount_out;
+    });
+    totals.amount_in = la.totals.amount_in; totals.amount_out = la.totals.amount_out;
     var rows = Object.keys(byPerson).map(function (k) { return byPerson[k]; });
     rows.forEach(function (r) { r.net = Math.round((r.amount_in - r.amount_out) * 100) / 100; });
     rows.sort(function (a, b) { return b.searches - a.searches; });
