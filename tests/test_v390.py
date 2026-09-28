@@ -78,6 +78,15 @@ def machine_b(cmds):
     return json.loads(line)
 
 
+def hub_members():
+    res = hub.sync_members(URL, TOKEN, "probe", VER, [])
+    return {m["username"]: m for m in res.get("members", [])}
+
+
+def team_id(c, name):
+    return next(t["id"] for t in c.get("/api/admin/teams").get_json() if t["name"] == name)
+
+
 def hub_ledger():
     """อ่านสมุดบนกลางทั้งเล่ม (after=0 · ไม่ส่งอะไร) → {gid: row}"""
     res = hub.sync_ledger(URL, TOKEN, "probe", VER, [], after=0)
@@ -355,6 +364,70 @@ def main():
     st = c.get("/api/hub/state").get_json()
     check("hub/state มีผลซิงก์สมุดกองกลาง + รายการฟิลด์", st.get("ledger", {}).get("ok") is True and st.get("ledger_fields") == list(hub.LEDGER_FIELDS))
     check("ไม่มี endpoint กระดานจากศูนย์กลางแบบเก่าแล้ว (หน้ากองกลางไม่ยิงศูนย์กลางทุก 8 วิ)", c.get("/api/hub/board").status_code == 404)
+
+    print("\n── ทีมซิงก์ผ่านไดเรกทอรีสมาชิก (\"เครื่อง Superadmin เป็นผู้จัดการทุกสิทธิ์ได้\") ──")
+    hm = hub_members()
+    check("ไดเรกทอรีกลางมีทีมของแต่ละคน: admin1/somchai อยู่ 'ทีม A' · wichai ไม่มีทีม",
+          hm["admin1"]["teams"] == '[["ทีม A",null]]' and hm["somchai"]["teams"] == '[["ทีม A",null]]' and hm["wichai"]["teams"] == "[]", str({u: m.get("teams") for u, m in hm.items()}))
+    out = machine_b([{"op": "teams"}, {"op": "login", "u": "somchai", "p": "pass66"}, {"op": "board"}, {"op": "logout"}])
+    check("B: ได้ 'ทีม A' มาตั้งแต่เข้าร่วม (สร้างตามกลาง synced=1 · สมาชิก admin1+somchai)",
+          out["teams"] == [{"name": "ทีม A", "rate": None, "synced": 1, "members": ["admin1", "somchai"]}], str(out["teams"]))
+    bs = out["board"][1]
+    check("B: somchai เห็นกองกลางของตัวเอง+admin1 (ทีมจากกลาง) ไม่เห็น wichai",
+          bs["scope"] == "team" and {r["username"] for r in bs["rows"]} == {"somchai", "admin1"}, str(bs["rows"]))
+    ta = team_id(c, "ทีม A")
+    r = c.put(f"/api/admin/teams/{ta}", json={"member_ids": [users["admin1"], users["somchai"], users["wichai"]], "rate_per_name": 5})
+    exp = {m["username"]: m for m in db.export_members()}
+    check("A: เพิ่ม wichai + ตั้งอัตราทีม 5 → สมาชิกทุกคนในทีมติดธงส่ง (3 คน) พร้อม teams",
+          r.status_code == 200 and set(exp) == {"admin1", "somchai", "wichai"} and exp["wichai"]["teams"] == '[["ทีม A",5.0]]', str(exp.get("wichai", {}).get("teams")))
+    res = server._members_sync_now("test")
+    check("A: ซิงก์ → กลางรับ (มีรหัสผู้ดูแล) · กลางเห็น wichai อยู่ทีม A อัตรา 5", res.get("ok") and not res.get("rejected") and json.loads(hub_members()["wichai"]["teams"]) == [["ทีม A", 5]])
+    out = machine_b([{"op": "sync"}, {"op": "teams"}, {"op": "login", "u": "wichai", "p": "pass77"}, {"op": "board"}, {"op": "logout"}])
+    check("B: ซิงก์แล้วทีม A มี 3 คน อัตรา 5 · wichai เห็นกองกลางของทั้งทีมแล้ว",
+          out["teams"] == [{"name": "ทีม A", "rate": 5.0, "synced": 1, "members": ["admin1", "somchai", "wichai"]}]
+          and {r["username"] for r in out["board"][1]["rows"]} == {"somchai", "admin1"}, str(out["teams"]))
+    out = machine_b([{"op": "login", "u": "admin1", "p": "secret9"},
+                     {"op": "post", "path": "/api/admin/teams", "json": {"name": "ทีม B", "member_ids": []}, "as": "mk"},
+                     {"op": "get", "path": "/api/admin/teams", "as": "list"}])
+    check("(เตรียม) B สร้าง 'ทีม B' ว่าง ๆ ในเครื่องเอง", out["mk"][0] == 200)
+    tb_id = next(t["id"] for t in out["list"][1] if t["name"] == "ทีม B")
+    ta_b = next(t["id"] for t in out["list"][1] if t["name"] == "ทีม A")
+    out = machine_b([{"op": "login", "u": "admin1", "p": "secret9"},
+                     {"op": "put", "path": f"/api/admin/teams/{ta_b}", "json": {"member_ids": []}, "as": "clear_a"},
+                     {"op": "sync", "as": "sync1"}, {"op": "teams", "as": "teams_b1"}])
+    check("B (Super Admin มีรหัสผู้ดูแล): ถอดทุกคนออกจากทีม A → กลางรับ", out["clear_a"][0] == 200 and out["sync1"]["ok"] and not out["sync1"]["rejected"]
+          and all(hub_members()[u]["teams"] == "[]" for u in ("admin1", "somchai", "wichai")), str(out["sync1"]))
+    res = server._members_sync_now("test")
+    s = res.get("summary") or {}
+    check("A: ซิงก์ → ทุกคนพ้นทีม A ตามกลาง (ทีม A ที่สร้างเองยังอยู่แต่ว่าง — ไม่ลบทีมที่เครื่องนี้สร้างเอง)",
+          sorted(s.get("updated", [])) == ["admin1", "somchai", "wichai"] and db.team_member_ids(users["somchai"]) == [users["somchai"]]
+          and any(t["name"] == "ทีม A" and not t["members"] for t in db.list_teams()), str(s))
+    out = machine_b([{"op": "login", "u": "admin1", "p": "secret9"},
+                     {"op": "put", "path": f"/api/admin/teams/{tb_id}", "json": {"member_ids": []}, "as": "x"},
+                     {"op": "sync"}, {"op": "teams"}])
+    check("B: ทีม A ที่สร้างตามกลาง (synced=1) ว่างแล้ว → ถูกลบทิ้ง · ทีม B ที่สร้างเองยังอยู่",
+          [t["name"] for t in out["teams"]] == ["ทีม B"], str(out["teams"]))
+    r = c.post("/api/hub/config", json={"admin_token": ""})
+    r = c.put(f"/api/admin/teams/{ta}", json={"member_ids": [users["admin1"], users["somchai"]]})
+    res = server._members_sync_now("test")
+    check("A ไม่มีรหัสผู้ดูแล → จัดทีมในเครื่องได้แต่ค้างส่ง (rejected auth 2 คน) พร้อมคำอธิบาย",
+          r.status_code == 200 and sorted(x["username"] for x in res.get("rejected", [])) == ["admin1", "somchai"]
+          and server._members_last["pending"] == 2 and "รหัสผู้ดูแล" in server._members_last["hint"], str(res.get("rejected")))
+    c.post("/api/hub/config", json={"admin_token": ADMIN})
+    res = server._members_sync_now("test")
+    check("ใส่รหัสผู้ดูแลกลับ → ทีมขึ้นกลาง", res.get("ok") and not res.get("rejected") and json.loads(hub_members()["somchai"]["teams"]) == [["ทีม A", 5]])
+    out = machine_b([{"op": "sync"}, {"op": "teams"}])
+    check("B: ได้ทีม A กลับมา (สร้างใหม่ตามกลาง) พร้อมอัตรา 5",
+          any(t["name"] == "ทีม A" and t["rate"] == 5.0 and t["members"] == ["admin1", "somchai"] and t["synced"] == 1 for t in out["teams"]), str(out["teams"]))
+    old = dict(hub_members()["somchai"])
+    old.pop("teams")
+    old["rev"] = old["rev"] + 50
+    old["display_name"] = "สมชาย (สคริปต์เก่า)"
+    s = db.apply_remote_members([old])
+    check("แถวจากสคริปต์รุ่นเก่าที่ไม่มี teams → ปรับข้อมูลอื่นแต่ไม่แตะทีมในเครื่อง",
+          s["updated"] == ["somchai"] and db.team_member_ids(users["somchai"]) and set(db.team_member_ids(users["somchai"])) == {users["admin1"], users["somchai"]})
+    with db.get_conn() as conn:
+        conn.execute("UPDATE users SET display_name='สมชาย', hub_rev=?, sync_dirty=0 WHERE username='somchai'", (hub_members()["somchai"]["rev"],))
 
     print(f"\nผล: ผ่าน {PASS} · ตก {FAIL}")
     return 1 if FAIL else 0

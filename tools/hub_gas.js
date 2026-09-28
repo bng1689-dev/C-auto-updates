@@ -27,6 +27,9 @@
  *  • ไม่รับการแก้ที่ทำให้ไม่เหลือ Super Admin ที่เปิดใช้งานเลย (reason "last_admin") — สองเครื่องปิดกันเองพร้อมกัน
  *    ก็ไม่ทำให้ทั้งองค์กรล็อกตัวเองออก
  *
+ * v3.9.0: ชีต 'members' เพิ่มคอลัมน์ 'teams' — ทีมที่สมาชิกสังกัด [[ชื่อทีม, อัตราทีม], ...] ("เครื่อง Superadmin เป็นผู้จัดการ
+ * ทุกสิทธิ์ได้") จัดทีมจากเครื่อง Super Admin ที่มีรหัสผู้ดูแล แล้วทุกเครื่องได้ทีมเดียวกัน (เป็นฟิลด์ที่ต้องมี ADMIN_TOKEN)
+ *
  * v3.9.0: เพิ่มชีต 'ledger' — สมุดกองกลางกลาง (เจ้าของโปรเจกต์สั่ง "แสดงค่าเดียวกันทุกเครื่อง") ทุกเครื่องเห็นรายการ
  * รับ/จ่ายชุดเดียวกัน · ก้อน kind="ledger" ส่ง "รายการที่เครื่องนั้นเพิ่ม/ลบ" + after (rev สูงสุดที่เคยรับ) แล้วรับ
  * ส่วนต่าง (rev > after) กลับไป — ไม่ใช่ทั้งเล่มทุกรอบ
@@ -74,8 +77,9 @@ var ADMIN_TOKEN = 'เปลี่ยนรหัสผู้ดูแลนี�
 var SHEET_NAME = 'counts';
 var PRESENCE_SHEET = 'presence';
 var MEMBERS_SHEET = 'members';
+// v3.9.0: + teams = ทีมที่สังกัด JSON [[ชื่อทีม, อัตราทีม], ...] (คอลัมน์ท้ายสุด — ชีตที่สร้างโดยรุ่น 3.7.0 จะถูกเติมหัวคอลัมน์ให้)
 var MEMBER_COLS = ['username', 'display_name', 'role', 'permissions', 'active', 'password_hash', 'salt',
-                   'rate_per_name', 'created_at', 'updated_at', 'deleted', 'rev', 'updated_by', 'received_at'];
+                   'rate_per_name', 'created_at', 'updated_at', 'deleted', 'rev', 'updated_by', 'received_at', 'teams'];
 // v3.9.0: สมุดกองกลางกลาง — origin = เครื่องที่บันทึกรายการ (ไม่เปลี่ยนแม้เครื่องอื่นลบ) · updated_by = เครื่องที่แก้ล่าสุด
 var LEDGER_SHEET = 'ledger';
 var LEDGER_COLS = ['gid', 'ts', 'ym', 'owner', 'kind', 'amount', 'note', 'created_by', 'deleted', 'rev',
@@ -98,8 +102,30 @@ function _membersSheet() {
     sh = ss.insertSheet(MEMBERS_SHEET);
     sh.appendRow(MEMBER_COLS);
     sh.setFrozenRows(1);
+  } else if (sh.getLastColumn() < MEMBER_COLS.length) {
+    sh.getRange(1, MEMBER_COLS.length, 1, 1).setValues([[MEMBER_COLS[MEMBER_COLS.length - 1]]]);   // ชีตรุ่น 3.7.0 → เติมหัว 'teams'
   }
   return sh;
+}
+
+/** ทีมของสมาชิกในรูปมาตรฐาน: JSON ของ [[ชื่อทีม, อัตราทีม|null], ...] เรียงตามชื่อ ไม่ซ้ำ (รับทั้ง JSON/อาร์เรย์) */
+function _normTeams(v) {
+  if (typeof v === 'string') { try { v = v.trim() ? JSON.parse(v) : []; } catch (e) { v = []; } }
+  if (!Array.isArray(v)) v = [];
+  var seen = {}, out = [];
+  v.forEach(function (it) {
+    var name, rate;
+    if (it && typeof it === 'object' && !Array.isArray(it)) { name = it.name; rate = (it.rate === undefined) ? it.rate_per_name : it.rate; }
+    else if (Array.isArray(it)) { name = it[0]; rate = it[1]; }
+    else { name = it; rate = null; }
+    name = String(name == null ? '' : name).trim().slice(0, 64);
+    if (!name || seen[name]) return;
+    seen[name] = true;
+    var r = (rate === '' || rate == null || isNaN(Number(rate))) ? null : Number(rate);
+    out.push([name, r]);
+  });
+  out.sort(function (a, b) { return a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0; });
+  return JSON.stringify(out);
 }
 
 function _readMembers(sh) {
@@ -116,7 +142,8 @@ function _readMembers(sh) {
                rate_per_name: (v[7] === '' || v[7] == null) ? null : Number(v[7]),
                created_at: _isoText(v[8]), updated_at: _isoText(v[9]), deleted: Number(v[10]) ? 1 : 0,
                rev: Number(v[11]) || 0,
-               updated_by: String(v[12] == null ? '' : v[12]), received_at: _isoText(v[13]) };
+               updated_by: String(v[12] == null ? '' : v[12]), received_at: _isoText(v[13]),
+               teams: _normTeams(v[14]) };
   });
   return map;
 }
@@ -133,11 +160,14 @@ function _memberCandidate(m, u, cur, nowText) {
     salt: String(m.salt == null ? '' : m.salt),
     rate_per_name: (m.rate_per_name === '' || m.rate_per_name == null) ? null : Number(m.rate_per_name),
     created_at: _isoText(m.created_at) || (cur && cur.created_at) || upd,
-    updated_at: upd, deleted: Number(m.deleted) ? 1 : 0
+    updated_at: upd, deleted: Number(m.deleted) ? 1 : 0,
+    // โปรแกรมรุ่นก่อน 3.9.0 ไม่ส่ง teams มา (undefined) → คงทีมเดิมไว้ ไม่ใช่ล้างทิ้ง
+    teams: (m.teams === undefined || m.teams === null) ? ((cur && cur.teams) || '[]') : _normTeams(m.teams)
   };
 }
 
-var _PROTECTED = ['display_name', 'role', 'permissions', 'active', 'rate_per_name', 'deleted'];
+// v3.9.0: teams อยู่ในรายการที่ต้องมีรหัสผู้ดูแล — สังกัดทีม/อัตราทีมจัดจากเครื่อง Super Admin เท่านั้น
+var _PROTECTED = ['display_name', 'role', 'permissions', 'active', 'rate_per_name', 'deleted', 'teams'];
 function _sameFields(a, b, fields) {
   for (var i = 0; i < fields.length; i++) {
     var k = fields[i];
@@ -192,7 +222,8 @@ function _syncMembers(installId, incoming, now, isAdmin) {
     var out = all.map(function (r) {
       return [_safeStr(r.username), _safeStr(r.display_name), r.role, _safeStr(r.permissions), r.active,
               r.password_hash, r.salt, r.rate_per_name == null ? '' : r.rate_per_name,
-              "'" + r.created_at, "'" + r.updated_at, r.deleted, r.rev, r.updated_by, "'" + r.received_at];
+              "'" + r.created_at, "'" + r.updated_at, r.deleted, r.rev, r.updated_by, "'" + r.received_at,
+              _safeStr(r.teams || '[]')];
     });
     var last = sh.getLastRow();
     if (last >= 2) sh.getRange(2, 1, last - 1, MEMBER_COLS.length).clearContent();
@@ -203,7 +234,8 @@ function _syncMembers(installId, incoming, now, isAdmin) {
     members: all.map(function (r) {
       return { username: r.username, display_name: r.display_name, role: r.role, permissions: r.permissions,
                active: r.active, password_hash: r.password_hash, salt: r.salt, rate_per_name: r.rate_per_name,
-               created_at: r.created_at, updated_at: r.updated_at, deleted: r.deleted, rev: r.rev };
+               created_at: r.created_at, updated_at: r.updated_at, deleted: r.deleted, rev: r.rev,
+               teams: r.teams || '[]' };
     })
   };
 }

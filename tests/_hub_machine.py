@@ -126,6 +126,11 @@ for cmd in json.loads(sys.stdin.read() or "[]"):
         out[key] = [r.status_code, r.get_json()]
     elif op == "ledger_state":
         out[key] = dict(server._ledger_last)
+    elif op == "teams":                          # ทีมในเครื่องนี้: ชื่อ · อัตรา · สมาชิก (ชื่อผู้ใช้) · สร้างตามกลางไหม
+        with db.get_conn() as conn:
+            synced = {r["id"]: r["synced"] for r in conn.execute("SELECT id, synced FROM teams").fetchall()}
+        out[key] = [{"name": t["name"], "rate": t["rate_per_name"], "synced": synced.get(t["id"], 0),
+                     "members": sorted(m["username"] for m in t["members"])} for t in db.list_teams()]
     elif op in ("get", "post", "put", "delete"):  # เรียก API ใดก็ได้ (ใช้เตรียมสถานการณ์)
         r = getattr(c, op)(cmd["path"], json=cmd.get("json")) if op != "get" else c.get(cmd["path"])
         out[key] = [r.status_code, r.get_json()]
