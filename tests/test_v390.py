@@ -189,9 +189,9 @@ def main():
           set(lb) == set(hl) and all(r["user_id"] > 0 and r["sync_dirty"] == 0 and r["hub_rev"] == hl[g]["rev"] and r["origin"] == install_a
                                       for g, r in lb.items()), str(lb)[:300])
     ba = out["board_admin"][1]
-    check("B: Super Admin เห็นทั้งองค์กร — รับ 350.5 จ่าย 40 สุทธิ 310.5 · 3 รายการ · scope=all · แก้ได้",
-          ba["totals"] == {"in": 350.5, "out": 40.0, "net": 310.5, "entries": 3} and ba["scope"] == "all" and ba["can_edit"] is True
-          and len(ba["rows"]) == 3 and len(ba["entries"]) == 3 and ba["hub"]["enabled"] is True, str(ba)[:300])
+    check("B: Super Admin เห็นทั้งองค์กร — รับ 350.5 จ่าย 40 สุทธิ 310.5 · 3 รายการ · scope=all · (v3.9.1) ยังแก้ไม่ได้เพราะเครื่องนี้ไม่มีรหัสผู้ดูแล",
+          ba["totals"] == {"in": 350.5, "out": 40.0, "net": 310.5, "entries": 3} and ba["scope"] == "all" and ba["can_edit"] is False
+          and ba["manager"] is False and len(ba["rows"]) == 3 and len(ba["entries"]) == 3 and ba["hub"]["enabled"] is True, str(ba)[:300])
     bw = out["board_wichai"][1]
     check("B: wichai (ไม่มีทีม) เห็นเฉพาะของตัวเอง — จ่าย 40 · 1 รายการ · scope=team · แก้ไม่ได้",
           bw["totals"] == {"in": 0.0, "out": 40.0, "net": -40.0, "entries": 1} and bw["scope"] == "team" and bw["can_edit"] is False
@@ -214,18 +214,22 @@ def main():
           b["scope"] == "all" and b["totals"]["entries"] == 3 and b["can_edit"] is False, str(b["totals"]))
     c.put(f"/api/admin/members/{users['wichai']}", json={"permissions": {}})
 
-    print("\n── B (Super Admin แต่ไม่มีรหัสผู้ดูแล) บันทึก → ค้างส่ง จนใส่รหัส ──")
+    print("\n── B (Super Admin แต่ไม่มีรหัสผู้ดูแล) → บันทึกไม่ได้ (v3.9.1) · รหัสผิด → ค้างส่งพร้อมเหตุผล · รหัสถูก → ขึ้นกลาง ──")
     out = machine_b([
         {"op": "login", "u": "admin1", "p": "secret9"},
+        {"op": "ledger_add", "u": "somchai", "kind": "out", "amount": 30, "note": "ค่ากาแฟ", "as": "add_noadmin"},
+        {"op": "get", "path": "/api/me", "as": "me_noadmin"},
+        {"op": "set_admin_token", "token": "wrong-admin-token-xxxxxxxx"},
         {"op": "ledger_add", "u": "somchai", "kind": "out", "amount": 30, "note": "ค่ากาแฟ"},
-        {"op": "ledger_sync", "as": "sync_noadmin"}, {"op": "ledger_pending", "as": "pending_noadmin"},
-        {"op": "ledger_state", "as": "state_noadmin"},
+        {"op": "ledger_sync", "as": "sync_wrong"}, {"op": "ledger_pending", "as": "pending_wrong"},
+        {"op": "ledger_state", "as": "state_wrong"},
     ])
-    check("B: บันทึกในเครื่องได้ (Super Admin) · ซิงก์โดยไม่มีรหัสผู้ดูแล → rejected auth · ค้าง 1",
-          out["ledger_add"][0] == 200 and out["sync_noadmin"]["ok"] and [x["reason"] for x in out["sync_noadmin"]["rejected"]] == ["auth"]
-          and out["pending_noadmin"] == 1, str(out["sync_noadmin"]))
-    check("B: แถบสถานะบอก 'รอส่ง 1' พร้อมเหตุผลให้ใส่รหัสผู้ดูแล",
-          out["state_noadmin"].get("pending") == 1 and "รหัสผู้ดูแล" in out["state_noadmin"].get("hint", ""), str(out["state_noadmin"]))
+    check("B: ไม่มีรหัสผู้ดูแล → บันทึกไม่ได้เลย (403 need_admin_token) · /api/me central_manager=False",
+          out["add_noadmin"][0] == 403 and out["add_noadmin"][1].get("need_admin_token") is True
+          and out["me_noadmin"][1].get("central_manager") is False, str(out["add_noadmin"]))
+    check("B: รหัสผู้ดูแลผิด → บันทึกในเครื่องได้ แต่กลางปัดตก (auth) ค้าง 1 พร้อมเหตุผล 'ไม่ตรงกับ ADMIN_TOKEN'",
+          out["ledger_add"][0] == 200 and out["sync_wrong"]["ok"] and [x["reason"] for x in out["sync_wrong"]["rejected"]] == ["auth"]
+          and out["pending_wrong"] == 1 and "ไม่ตรง" in out["state_wrong"].get("hint", ""), f"{out['sync_wrong']} {out['state_wrong']}")
     check("กลาง: ยังไม่มีรายการ 30 · A ซิงก์แล้วก็ไม่ได้อะไรมา", len(hub_ledger()) == 3 and server._ledger_sync_now("test").get("entries") == [])
     out = machine_b([
         {"op": "set_admin_token", "token": ADMIN},
@@ -409,13 +413,14 @@ def main():
           [t["name"] for t in out["teams"]] == ["ทีม B"], str(out["teams"]))
     r = c.post("/api/hub/config", json={"admin_token": ""})
     r = c.put(f"/api/admin/teams/{ta}", json={"member_ids": [users["admin1"], users["somchai"]]})
-    res = server._members_sync_now("test")
-    check("A ไม่มีรหัสผู้ดูแล → จัดทีมในเครื่องได้แต่ค้างส่ง (rejected auth 2 คน) พร้อมคำอธิบาย",
-          r.status_code == 200 and sorted(x["username"] for x in res.get("rejected", [])) == ["admin1", "somchai"]
-          and server._members_last["pending"] == 2 and "รหัสผู้ดูแล" in server._members_last["hint"], str(res.get("rejected")))
+    check("v3.9.1: A ถอดรหัสผู้ดูแลออก → จัดทีมไม่ได้เลย (403 need_admin_token) ไม่มีอะไรค้างส่ง · central_manager=False",
+          r.status_code == 403 and r.get_json().get("need_admin_token") is True and db.count_pending_members() == 0
+          and c.get("/api/me").get_json().get("central_manager") is False, r.get_data(as_text=True)[:160])
     c.post("/api/hub/config", json={"admin_token": ADMIN})
+    r = c.put(f"/api/admin/teams/{ta}", json={"member_ids": [users["admin1"], users["somchai"]]})
     res = server._members_sync_now("test")
-    check("ใส่รหัสผู้ดูแลกลับ → ทีมขึ้นกลาง", res.get("ok") and not res.get("rejected") and json.loads(hub_members()["somchai"]["teams"]) == [["ทีม A", 5]])
+    check("ใส่รหัสผู้ดูแลกลับ → จัดทีมได้และขึ้นกลาง", r.status_code == 200 and res.get("ok") and not res.get("rejected")
+          and json.loads(hub_members()["somchai"]["teams"]) == [["ทีม A", 5]], str(res.get("rejected")))
     out = machine_b([{"op": "sync"}, {"op": "teams"}])
     check("B: ได้ทีม A กลับมา (สร้างใหม่ตามกลาง) พร้อมอัตรา 5",
           any(t["name"] == "ทีม A" and t["rate"] == 5.0 and t["members"] == ["admin1", "somchai"] and t["synced"] == 1 for t in out["teams"]), str(out["teams"]))

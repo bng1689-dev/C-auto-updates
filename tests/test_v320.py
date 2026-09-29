@@ -102,6 +102,11 @@ def main():
           and r.get_json().get("need_grant") is True, r.get_data(as_text=True)[:120])
     server.urllib.request.urlopen = _orig_open
 
+    # v3.9.1: เชื่อมศูนย์กลางแล้ว การจัดทีมต้องทำจากเครื่องที่มีรหัสผู้ดูแล — เครื่องนี้ยังไม่มี → 403 ก่อน ใส่แล้วจึงสร้างได้
+    check("v3.9.1: เครื่องที่เชื่อมศูนย์กลางแต่ไม่มีรหัสผู้ดูแล → สร้างทีมไม่ได้ (403 need_admin_token)",
+          (lambda r: r.status_code == 403 and r.get_json().get("need_admin_token") is True)(
+              admin.post("/api/admin/teams", json={"name": "ทีม A", "member_ids": []})))
+    server.auth.update_config(hub_admin_token="test-admin-token-xyz")
     admin.post("/api/admin/teams", json={"name": "ทีม A", "member_ids": [users["admin1"], users["somchai"]]})
     admin.post("/api/admin/teams", json={"name": "ทีม B", "member_ids": [users["wichai"]]})
     seed(users["admin1"], 4); seed(users["somchai"], 2, 1); seed(users["wichai"], 9)
