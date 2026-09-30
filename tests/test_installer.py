@@ -232,6 +232,35 @@ def main():
     check("workflow สร้างชุดติดตั้งใช้ secrets ไม่ใช่ค่าคงที่", "secrets.INSTALLER_GATE_PASSWORD" in (ROOT / ".github" / "workflows" / "installer.yml").read_text(encoding="utf-8"))
     check("dist/ อยู่ใน .gitignore", "dist/" in (ROOT / ".gitignore").read_text(encoding="utf-8"))
 
+    print("\n── v3.10.0: รหัสลับศูนย์กลางจากชุดติดตั้ง (hub_seed.json) ──")
+    check("ชุดที่สร้างโดยไม่ตั้ง CRIMES_HUB_TOKEN → ไม่มี hub_seed.json · install.json ไม่บอก hub_seed",
+          not (dist / bi.HUB_SEED_FILE).exists() and not json.loads((dist / "install.json").read_text(encoding="utf-8")).get("hub_seed"))
+    os.environ[bi.ENV_HUB] = "hub-token-for-test-0123456789"
+    rc = bi.main(["--out", str(TMP / "dist3"), "--no-zip", "--skip-browsers", "--skip-runtime"])
+    d3 = TMP / "dist3" / "CRIMES_AUTO_Setup_v5.0.0"
+    hs = json.loads((d3 / bi.HUB_SEED_FILE).read_text(encoding="utf-8")) if (d3 / bi.HUB_SEED_FILE).exists() else {}
+    check("ตั้ง CRIMES_HUB_TOKEN → มี hub_seed.json {token} · install.json hub_seed=true · ด่านตรวจผ่าน (รหัสอยู่ได้เฉพาะไฟล์นี้)",
+          rc == 0 and hs.get("token") == "hub-token-for-test-0123456789" and json.loads((d3 / "install.json").read_text(encoding="utf-8")).get("hub_seed") is True)
+    (d3 / "app" / "x.txt").write_text("hub-token-for-test-0123456789", encoding="utf-8")
+    try:
+        bi.self_check(d3, "5.0.0", [GATE, SEED, "hub-token-for-test-0123456789"], False)
+        res = "passed"
+    except SystemExit as e:
+        res = str(e)
+    check("รหัสลับศูนย์กลางหลุดไปไฟล์อื่น → ด่านตรวจไม่ผ่าน", "x.txt" in res, res)
+    (d3 / "app" / "x.txt").unlink()
+    os.environ[bi.ENV_HUB] = "short"
+    try:
+        bi.main(["--out", str(TMP / "dist4"), "--no-zip", "--skip-browsers", "--skip-runtime"])
+        res = "ok"
+    except SystemExit as e:
+        res = str(e)
+    check("CRIMES_HUB_TOKEN สั้นเกิน → หยุด", bi.ENV_HUB in res, res)
+    os.environ.pop(bi.ENV_HUB, None)
+    check("Install.ps1 คัดลอก hub_seed.json เฉพาะติดตั้งใหม่ · release.py กันไฟล์ seed หลุดเข้าแพ็กเกจอัปเดต",
+          "hub_seed.json" in (bi.TPL / "Install.ps1").read_text(encoding="utf-8-sig")
+          and "hub_seed.json" in (ROOT / "tools" / "release.py").read_text(encoding="utf-8"))
+
     print(f"\nผล: ผ่าน {PASS} · ตก {FAIL}")
     return 1 if FAIL else 0
 

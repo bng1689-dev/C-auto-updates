@@ -154,6 +154,16 @@ if ((Test-Path $seedSrc) -and $freshInstall) {
 } elseif (Test-Path $seedDst) {
     Remove-Item $seedDst -Force -ErrorAction SilentlyContinue
 }
+# ---- v3.10.0: รหัสลับศูนย์กลางจากชุดติดตั้ง (ถ้าผู้ดูแลฝังมา) — เครื่องใหม่เชื่อมศูนย์กลางเองตอนเปิดครั้งแรก แล้วไฟล์ถูกลบ ----
+$hubSrc = Join-Path $Src "hub_seed.json"
+$hubDst = Join-Path $Install "app\backend\hub_seed.json"
+if ((Test-Path $hubSrc) -and $freshInstall) {
+    New-Item -ItemType Directory -Force -Path (Split-Path $hubDst) | Out-Null
+    Copy-Item $hubSrc $hubDst -Force
+    Write-Host "  - เตรียมการเชื่อมต่อศูนย์กลาง (เปิดโปรแกรมแล้วกด 'สมัครใช้งาน' ได้เลย)"
+} elseif (Test-Path $hubDst) {
+    Remove-Item $hubDst -Force -ErrorAction SilentlyContinue
+}
 
 # ---- ไฟล์ประกอบ: ไอคอน · ตัวถอนการติดตั้ง · ข้อมูลการติดตั้ง ----
 foreach ($f in @("icon.ico", "Uninstall.ps1", "ถอนการติดตั้ง.bat", "Uninstall.bat", "install.json")) {

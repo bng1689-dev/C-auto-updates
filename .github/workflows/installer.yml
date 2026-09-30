@@ -30,6 +30,8 @@ jobs:
         env:
           CRIMES_INSTALL_PASSWORD: ${{ secrets.INSTALLER_GATE_PASSWORD }}
           CRIMES_SEED_PASSWORD: ${{ secrets.INSTALLER_SEED_PASSWORD }}
+          # v3.10.0 (ไม่บังคับ): HUB_TOKEN ของศูนย์กลาง → ชุดติดตั้งฝัง hub_seed.json ให้เครื่องใหม่เชื่อมศูนย์กลางเอง (URL ฝังในโปรแกรมแล้ว)
+          CRIMES_HUB_TOKEN: ${{ secrets.INSTALLER_HUB_TOKEN }}
         run: |
           if [ -z "$CRIMES_INSTALL_PASSWORD" ] || [ -z "$CRIMES_SEED_PASSWORD" ]; then
             echo "ต้องตั้ง secrets INSTALLER_GATE_PASSWORD และ INSTALLER_SEED_PASSWORD ก่อน"; exit 1; fi
