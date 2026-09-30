@@ -15,11 +15,10 @@ data_dir, state_file, token = sys.argv[1:4]
 script_admin = sys.argv[4] if len(sys.argv) > 4 else ""
 os.environ["CRIMES_DATA_DIR"] = data_dir
 os.environ["CRIMES_UPLOAD_DIR"] = str(Path(data_dir) / "up")
+os.environ["CRIMES_KEEP_SEED"] = "1"     # เครื่องจำลองอาจกำลังทดสอบไฟล์ seed ที่เพิ่งถูกวาง — _app ห้ามเก็บกวาดทิ้ง
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 from _app import APP  # noqa: E402,F401
-from backend import server  # noqa: E402
-import db  # noqa: E402
 import hub  # noqa: E402
 
 
@@ -36,7 +35,11 @@ def fake_post(url, payload, tok, admin_token=None):
     return json.loads(r.stdout)
 
 
-server.hub._post = fake_post
+# ต้องสวมก่อน import server — v3.10.0 server ดึงไดเรกทอรีกลางตั้งแต่ตอน import (_boot_seed) ห้ามให้แตะเน็ตจริง
+hub._post = fake_post
+from backend import server  # noqa: E402
+import db  # noqa: E402
+
 server._hub_kick = lambda *a, **k: None          # ซิงก์เมื่อสั่งเท่านั้น (ให้ผลทดสอบแน่นอน)
 server.app.config["TESTING"] = True
 c = server.app.test_client()
@@ -96,7 +99,7 @@ for cmd in json.loads(sys.stdin.read() or "[]"):
                     if u else None)
     elif op == "members":
         out[key] = [{"username": u["username"], "display_name": u["display_name"], "role": u["role"],
-                     "active": u["active"]} for u in db.list_users()]
+                     "active": u["active"], "pending": u.get("pending", 0)} for u in db.list_users(include_pending=True)]
     elif op == "state":
         out[key] = c.get("/api/hub/members/state").get_json()
     elif op == "has_passcode":
@@ -131,6 +134,20 @@ for cmd in json.loads(sys.stdin.read() or "[]"):
             synced = {r["id"]: r["synced"] for r in conn.execute("SELECT id, synced FROM teams").fetchall()}
         out[key] = [{"name": t["name"], "rate": t["rate_per_name"], "synced": synced.get(t["id"], 0),
                      "members": sorted(m["username"] for m in t["members"])} for t in db.list_teams()]
+    # ---- v3.10.0: สมัครใช้งานเอง ----
+    elif op == "register":
+        r = c.post("/api/register", json={"username": cmd["u"], "password": cmd["p"], "password2": cmd.get("p2", cmd["p"]),
+                                          "display_name": cmd.get("name", ""), "hub_code": cmd.get("code", "")})
+        out[key] = [r.status_code, r.get_json()]
+    elif op == "auth_state":
+        out[key] = c.get("/api/auth/state").get_json()
+    elif op == "clear_throttle":                 # ล้างตัวนับหน่วงสมัคร/ล็อกอิน (ชุดทดสอบยิงติดกันหลายครั้ง)
+        with db.get_conn() as conn:
+            conn.execute("DELETE FROM auth_throttle")
+        out[key] = True
+    elif op == "login_full":                     # เหมือน login แต่คืน JSON เต็ม (ดูข้อความ 'รออนุมัติ')
+        r = c.post("/api/login", json={"username": cmd["u"], "password": cmd["p"]})
+        out[key] = [r.status_code, r.get_json()]
     elif op in ("get", "post", "put", "delete"):  # เรียก API ใดก็ได้ (ใช้เตรียมสถานการณ์)
         r = getattr(c, op)(cmd["path"], json=cmd.get("json")) if op != "get" else c.get(cmd["path"])
         out[key] = [r.status_code, r.get_json()]

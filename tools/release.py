@@ -31,7 +31,8 @@ from pkg import ROOT, PKG, MANIFEST, load_manifest, extract as pkg_extract  # no
 
 CHANGELOG = ROOT / "CHANGELOG.md"
 RAW_BASE = "https://raw.githubusercontent.com/bng1689-dev/C-auto-updates/main/"
-FORBIDDEN = ("tools/", "keygen", "hub_gas", "crimes_license_private", ".key", "__pycache__", ".pyc")
+FORBIDDEN = ("tools/", "keygen", "hub_gas", "crimes_license_private", ".key", "__pycache__", ".pyc",
+             "seed_account.json", "hub_seed.json")     # ไฟล์ seed ของชุดติดตั้ง (แฮชบัญชี/รหัสลับศูนย์กลาง) ห้ามอยู่ในแพ็กเกจอัปเดตสาธารณะ
 
 # ฟังก์ชันที่ 'ต้องมี' ในแพ็กเกจ — หายไปเมื่อไหร่โปรแกรมเปิดมาเป็นหน้าดำ/เริ่มรอบไม่ได้ (เคยเกิดจริง v2.9.2)
 CORE_HTML = ("function showApp", "function checkAuth", "function showAuth", "function bootApp",

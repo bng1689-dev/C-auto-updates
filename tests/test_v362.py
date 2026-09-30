@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
-"""v3.6.2 — เริ่มค้นเองหลังตรวจพบว่าเข้าสู่ระบบแล้ว: นับถอยหลัง 30 วินาที (เดิม 10) — ไม่เปิดเบราว์เซอร์
+"""v3.6.2/v3.10.0 — เริ่มค้นเองหลังตรวจพบว่าเข้าสู่ระบบแล้ว — ไม่เปิดเบราว์เซอร์
 
-  • ค่าคงที่ AUTOSTART_SEC = 30 และข้อความแจ้ง/หน้าจอดึงตัวเลขจากค่านี้ (ไม่มีเลข 10 ฝังไว้)
-  • _await_login นับถอยหลังครบ 30 วิจริงก่อนเริ่มเอง (จำลองนาฬิกา — ไม่ต้องรอจริง) และเริ่มทันทีเมื่อกดปุ่ม
+  • v3.10.0: เป็นสวิตช์ใน Setting (autostart_enabled) · ค่าเริ่มต้น "ปิด" — ตรวจพบว่าเข้าสู่ระบบแล้วก็ไม่นับถอยหลัง
+    รอกดปุ่มเท่านั้น (เจ้าของโปรเจกต์สั่ง "สถานะเริ่มต้นให้ปิดไว้ ไม่ต้องนับถอยหลัง")
+  • เปิดสวิตช์แล้ว: นับถอยหลัง 30 วินาที (v3.6.2) — ข้อความ/หน้าจอดึงตัวเลขจากค่าคงที่ ไม่มีเลขฝังไว้
+  • _await_login นับครบ 30 วิจริงก่อนเริ่มเอง (จำลองนาฬิกา) และเริ่มทันทีเมื่อกดปุ่ม
 """
 import os
 import re
@@ -16,6 +18,7 @@ os.environ["CRIMES_DATA_DIR"] = str(TEST_DATA / "data")
 os.environ["CRIMES_UPLOAD_DIR"] = str(TEST_DATA / "up")
 from _app import APP  # noqa: E402  (โค้ดแอปจาก build/ = แพ็กเกจรุ่นล่าสุด)
 
+import auth  # noqa: E402
 import engine  # noqa: E402
 import worker  # noqa: E402
 
@@ -87,7 +90,18 @@ def main():
     check("หน้าจอแสดงตัวเลขจากสถานะ (autostart_in) ทั้งปุ่ม/ขั้นตอน/วงแหวน — ไม่มีเลขตายตัว",
           html.count("s.autostart_in") >= 4 and "10 วิ" not in html, str(html.count("s.autostart_in")))
 
-    print("\n── นับถอยหลังจริง (นาฬิกาจำลอง) ──")
+    print("\n── v3.10.0: สวิตช์เริ่มอัตโนมัติ — ค่าเริ่มต้น 'ปิด' ไม่นับถอยหลัง ──")
+    check("config เริ่มต้น: autostart_enabled=False", auth.load_config().get("autostart_enabled") is False,
+          str(auth.load_config().get("autostart_enabled")))
+    ok, clock, log = run_await_login(press_start_at=8)
+    check("ปิดอยู่: ตรวจพบเข้าสู่ระบบแล้วก็ไม่นับถอยหลัง (autostart_in คงเป็น 0) · บันทึกบอกว่าปิดอยู่",
+          ok and clock["max_left"] == 0 and any("การเริ่มอัตโนมัติปิดอยู่" in ln for ln in log), str(log[-3:]))
+    check("ปิดอยู่: กด 'เริ่มค้นหา' แล้วเริ่มได้ตามปกติ", ok and clock["ticks"] < 15, f"ticks={clock['ticks']}")
+    check("หน้าตั้งค่ามีสวิตช์ (setAutoStart) และส่งค่าไปบันทึก",
+          'id="setAutoStart"' in html and "autostart_enabled" in html)
+
+    print("\n── เปิดสวิตช์ → นับถอยหลังจริง (นาฬิกาจำลอง) ──")
+    auth.update_config(autostart_enabled=True)
     ok, clock, log = run_await_login()
     check("ตรวจพบเข้าสู่ระบบ → บันทึกว่าจะเริ่มเองใน 30 วินาที",
           any("จะเริ่มค้นเองใน 30 วินาที" in ln for ln in log), str(log[-3:]))

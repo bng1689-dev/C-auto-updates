@@ -24,8 +24,13 @@
  *    เครื่องที่มีแค่ HUB_TOKEN (ทุกเครื่องมี — อยู่ในรหัสเชื่อมต่อที่แจกสมาชิก) ทำได้แค่ดึงไดเรกทอรี และส่ง
  *    "รหัสผ่านใหม่ของสมาชิกธรรมดาที่มีอยู่แล้ว" (เปลี่ยนรหัสตัวเอง/ลืมรหัส) — ส่งอย่างอื่นมาจะถูกปัดตก (reason "auth")
  *    ข้อยกเว้นเดียว: ไดเรกทอรีว่างเปล่า = เครื่องแรกขององค์กรกำลังตั้งค่า รับได้ทั้งก้อน
+ *    (v3.10.0: ถ้าตั้ง ADMIN_TOKEN ในสคริปต์แล้ว ก้อนแรกก็ต้องเซ็นผู้ดูแล — รหัสร่วมฝังในโปรแกรมสาธารณะแล้ว)
  *  • ไม่รับการแก้ที่ทำให้ไม่เหลือ Super Admin ที่เปิดใช้งานเลย (reason "last_admin") — สองเครื่องปิดกันเองพร้อมกัน
  *    ก็ไม่ทำให้ทั้งองค์กรล็อกตัวเองออก
+ *
+ * v3.10.0: ชีต 'members' เพิ่มคอลัมน์ 'pending' — สมัครใช้งานเองจากหน้าเข้าสู่ระบบ ("ให้เป็นการสมัครและได้รับการอนุญาต
+ * ใช้งานและสิทธิ์จาก Superadmin เท่านั้น"): เครื่องที่มีแค่ HUB_TOKEN ส่ง 'แถวใหม่ที่ pending=1 active=0 role=member ไม่มีสิทธิ์'
+ * ได้ (คำขอสมัคร) · การอนุมัติ (pending→0 active→1 + บทบาท/สิทธิ์) ต้องเซ็นด้วย ADMIN_TOKEN · จำกัดคำขอค้าง MAX_PENDING
  *
  * v3.9.0: ชีต 'members' เพิ่มคอลัมน์ 'teams' — ทีมที่สมาชิกสังกัด [[ชื่อทีม, อัตราทีม], ...] ("เครื่อง Superadmin เป็นผู้จัดการ
  * ทุกสิทธิ์ได้") จัดทีมจากเครื่อง Super Admin ที่มีรหัสผู้ดูแล แล้วทุกเครื่องได้ทีมเดียวกัน (เป็นฟิลด์ที่ต้องมี ADMIN_TOKEN)
@@ -71,7 +76,7 @@
  */
 
 // v3.9.2: รุ่นของสคริปต์นี้ — ส่งกลับในทุกคำตอบ (ver) ให้โปรแกรมโชว์ว่า Deploy รุ่นไหนอยู่จริง (รุ่นเก่าไม่ส่ง = 'รุ่นเก่า')
-var HUB_SCRIPT_VERSION = '3.9.2';
+var HUB_SCRIPT_VERSION = '3.10.0';
 
 var HUB_TOKEN = 'เปลี่ยนรหัสนี้ก่อนใช้งานจริง';
 // v3.7.0: รหัสผู้ดูแลศูนย์กลาง — เซ็นก้อน members ที่ "แก้ไดเรกทอรี" (ดูกติกาด้านบน) · ต้องต่างจาก HUB_TOKEN
@@ -81,8 +86,11 @@ var SHEET_NAME = 'counts';
 var PRESENCE_SHEET = 'presence';
 var MEMBERS_SHEET = 'members';
 // v3.9.0: + teams = ทีมที่สังกัด JSON [[ชื่อทีม, อัตราทีม], ...] (คอลัมน์ท้ายสุด — ชีตที่สร้างโดยรุ่น 3.7.0 จะถูกเติมหัวคอลัมน์ให้)
+// v3.10.0: + pending = คำขอสมัครที่รอ Super Admin อนุมัติ (เครื่องที่มีแค่ HUB_TOKEN ส่ง 'แถวใหม่ที่ pending' ได้ — อย่างอื่นไม่ได้)
 var MEMBER_COLS = ['username', 'display_name', 'role', 'permissions', 'active', 'password_hash', 'salt',
-                   'rate_per_name', 'created_at', 'updated_at', 'deleted', 'rev', 'updated_by', 'received_at', 'teams'];
+                   'rate_per_name', 'created_at', 'updated_at', 'deleted', 'rev', 'updated_by', 'received_at', 'teams',
+                   'pending'];
+var MAX_PENDING = 200;   // จำกัดคำขอค้าง — URL เป็นสาธารณะ กันคนนอกยิงคำขอปลอมจนชีตบวม (เกิน → reason 'full')
 // v3.9.0: สมุดกองกลางกลาง — origin = เครื่องที่บันทึกรายการ (ไม่เปลี่ยนแม้เครื่องอื่นลบ) · updated_by = เครื่องที่แก้ล่าสุด
 var LEDGER_SHEET = 'ledger';
 var LEDGER_COLS = ['gid', 'ts', 'ym', 'owner', 'kind', 'amount', 'note', 'created_by', 'deleted', 'rev',
@@ -106,7 +114,9 @@ function _membersSheet() {
     sh.appendRow(MEMBER_COLS);
     sh.setFrozenRows(1);
   } else if (sh.getLastColumn() < MEMBER_COLS.length) {
-    sh.getRange(1, MEMBER_COLS.length, 1, 1).setValues([[MEMBER_COLS[MEMBER_COLS.length - 1]]]);   // ชีตรุ่น 3.7.0 → เติมหัว 'teams'
+    // ชีตรุ่นก่อน → เติมหัวคอลัมน์ที่ขาด (teams, pending)
+    var have = sh.getLastColumn();
+    for (var ci = have; ci < MEMBER_COLS.length; ci++) sh.getRange(1, ci + 1, 1, 1).setValues([[MEMBER_COLS[ci]]]);
   }
   return sh;
 }
@@ -117,6 +127,7 @@ function _normTeams(v) {
   if (!Array.isArray(v)) v = [];
   var seen = {}, out = [];
   v.forEach(function (it) {
+    if (out.length >= 50) return;      // v3.10.0: เพดานทีมต่อคน — กันสตริงยาวจนเขียนชีตล้ม
     var name, rate;
     if (it && typeof it === 'object' && !Array.isArray(it)) { name = it.name; rate = (it.rate === undefined) ? it.rate_per_name : it.rate; }
     else if (Array.isArray(it)) { name = it[0]; rate = it[1]; }
@@ -146,7 +157,7 @@ function _readMembers(sh) {
                created_at: _isoText(v[8]), updated_at: _isoText(v[9]), deleted: Number(v[10]) ? 1 : 0,
                rev: Number(v[11]) || 0,
                updated_by: String(v[12] == null ? '' : v[12]), received_at: _isoText(v[13]),
-               teams: _normTeams(v[14]) };
+               teams: _normTeams(v[14]), pending: Number(v[15]) ? 1 : 0 };
   });
   return map;
 }
@@ -154,23 +165,42 @@ function _readMembers(sh) {
 /** แถวที่เครื่องลูกส่งมา → รูปแบบมาตรฐานเดียวกับที่เก็บ (บทบาทมีแค่ 2 ค่า · ตัวเลข/ข้อความสะอาด) */
 function _memberCandidate(m, u, cur, nowText) {
   var upd = _isoText(m.updated_at) || nowText;
-  return {
-    username: u, display_name: String(m.display_name == null ? '' : m.display_name),
+  var cand = {
+    // v3.10.0: จำกัดความยาวทุกช่องข้อความ — เซลล์ของ Sheet รับได้ 50,000 ตัว ถ้าปล่อยยาวไม่จำกัด
+    // การเขียนทั้งชีตจะล้มกลางคัน (คนถือรหัสร่วมยัดชื่อยาว ๆ มากับคำขอสมัครได้)
+    username: u, display_name: String(m.display_name == null ? '' : m.display_name).slice(0, 80),
     role: (m.role === 'super_admin') ? 'super_admin' : 'member',
-    permissions: (typeof m.permissions === 'string') ? m.permissions : JSON.stringify(m.permissions || {}),
+    permissions: ((typeof m.permissions === 'string') ? m.permissions : JSON.stringify(m.permissions || {})).slice(0, 2000),
     active: Number(m.active) ? 1 : 0,
-    password_hash: String(m.password_hash == null ? '' : m.password_hash),
-    salt: String(m.salt == null ? '' : m.salt),
+    password_hash: String(m.password_hash == null ? '' : m.password_hash).slice(0, 200),
+    salt: String(m.salt == null ? '' : m.salt).slice(0, 200),
     rate_per_name: (m.rate_per_name === '' || m.rate_per_name == null) ? null : Number(m.rate_per_name),
-    created_at: _isoText(m.created_at) || (cur && cur.created_at) || upd,
-    updated_at: upd, deleted: Number(m.deleted) ? 1 : 0,
+    created_at: _isoText(m.created_at).slice(0, 19) || (cur && cur.created_at) || upd,
+    updated_at: upd.slice(0, 19), deleted: Number(m.deleted) ? 1 : 0,
     // โปรแกรมรุ่นก่อน 3.9.0 ไม่ส่ง teams มา (undefined) → คงทีมเดิมไว้ ไม่ใช่ล้างทิ้ง
-    teams: (m.teams === undefined || m.teams === null) ? ((cur && cur.teams) || '[]') : _normTeams(m.teams)
+    teams: (m.teams === undefined || m.teams === null) ? ((cur && cur.teams) || '[]') : _normTeams(m.teams),
+    // v3.10.0: รุ่นก่อน 3.10.0 ไม่ส่ง pending → คงค่าเดิม · คำขอ (pending) ต้องไม่เปิดใช้งาน
+    pending: (m.pending === undefined || m.pending === null) ? ((cur && cur.pending) || 0) : (Number(m.pending) ? 1 : 0)
   };
+  // เปิดใช้งานแล้ว = ไม่ใช่คำขอ (เครื่อง Super Admin รุ่นเก่าที่ไม่รู้จัก pending สั่ง active=1 ก็เท่ากับอนุมัติ)
+  if (cand.active) cand.pending = 0;
+  return cand;
+}
+function _isSelfRegistration(cand) {
+  // แถวใหม่แบบ 'คำขอสมัคร': สมาชิกธรรมดา ไม่มีสิทธิ์ ไม่มีทีม ยังไม่เปิดใช้งาน มีแฮชรหัสผ่านหน้าตาถูกต้อง
+  // (v3.10.0: แฮช/salt ต้องเป็น hex จริง — กันคนถือรหัสร่วมยัดสูตร/ข้อความเพี้ยนที่ทำให้เครื่องอื่นล้มตอนเทียบรหัส)
+  var perms = String(cand.permissions || '{}').replace(/\s/g, '');
+  return !!cand.pending && !cand.active && cand.role === 'member' && !cand.deleted
+    && /^[0-9a-f]{64}$/.test(String(cand.password_hash)) && /^[0-9a-f]{16,64}$/.test(String(cand.salt))
+    && (perms === '{}' || perms === 'null') && _normTeams(cand.teams) === '[]'
+    && (cand.rate_per_name === null || cand.rate_per_name === undefined);
+}
+function _pendingCount(map) {
+  return Object.keys(map).filter(function (k) { return map[k].pending && !map[k].deleted; }).length;
 }
 
 // v3.9.0: teams อยู่ในรายการที่ต้องมีรหัสผู้ดูแล — สังกัดทีม/อัตราทีมจัดจากเครื่อง Super Admin เท่านั้น
-var _PROTECTED = ['display_name', 'role', 'permissions', 'active', 'rate_per_name', 'deleted', 'teams'];
+var _PROTECTED = ['display_name', 'role', 'permissions', 'active', 'rate_per_name', 'deleted', 'teams', 'pending'];
 function _sameFields(a, b, fields) {
   for (var i = 0; i < fields.length; i++) {
     var k = fields[i];
@@ -185,11 +215,13 @@ function _otherActiveAdmins(map, except) {
 }
 
 /** v3.7.0: รับแถวที่เครื่องลูกแก้ → ตรวจ rev / สิทธิ์ / Super Admin คนสุดท้าย → คืนทั้งไดเรกทอรี + รายการที่ปัดตก
- *  isAdmin = ก้อนนี้เซ็นด้วย ADMIN_TOKEN ถูกต้อง (เครื่องของ Super Admin) */
-function _syncMembers(installId, incoming, now, isAdmin) {
+ *  isAdmin = ก้อนนี้เซ็นด้วย ADMIN_TOKEN ถูกต้อง (เครื่องของ Super Admin) · adminReady = สคริปต์ตั้ง ADMIN_TOKEN แล้ว */
+function _syncMembers(installId, incoming, now, isAdmin, adminReady) {
   var sh = _membersSheet();
   var map = _readMembers(sh);
-  var bootstrap = Object.keys(map).length === 0;      // ไดเรกทอรีว่าง = เครื่องแรกขององค์กรกำลังตั้งค่า
+  // ไดเรกทอรีว่าง = เครื่องแรกขององค์กรกำลังตั้งค่า — v3.10.0: ถ้าสคริปต์ตั้ง ADMIN_TOKEN แล้ว ก้อนแรกต้องเซ็นผู้ดูแลด้วย
+  // (รหัสร่วมเป็นสาธารณะตั้งแต่ฝังในโปรแกรม — ห้ามให้คนนอกยึดไดเรกทอรีที่เพิ่งถูกล้าง/สร้างใหม่ด้วยรหัสร่วมอย่างเดียว)
+  var bootstrap = Object.keys(map).length === 0 && (isAdmin || !adminReady);
   var nowText = _isoText(now);
   var applied = 0, rejected = [];
   (incoming || []).forEach(function (m) {
@@ -204,10 +236,13 @@ function _syncMembers(installId, incoming, now, isAdmin) {
     if (cur && _sameContent(cur, cand)) return;        // ไม่มีอะไรเปลี่ยน — ไม่เพิ่มรุ่น
     if (!isAdmin && !bootstrap) {
       // ไม่มีรหัสผู้ดูแล: รับเฉพาะ "รหัสผ่านใหม่ของสมาชิกธรรมดาที่มีอยู่แล้ว" (เปลี่ยนรหัสตัวเอง/ลืมรหัส)
-      // สร้างคน · แก้บทบาท/สิทธิ์/สถานะ/ชื่อ/อัตรา · ลบ · แตะ Super Admin → ต้องมี ADMIN_TOKEN
-      var selfService = !!cur && !cur.deleted && cur.role !== 'super_admin' && !cand.deleted
+      // และ (v3.10.0) "คำขอสมัครใหม่" = แถวใหม่ pending=1 active=0 role=member ไม่มีสิทธิ์/ทีม
+      // สร้างคนแบบอื่น · แก้บทบาท/สิทธิ์/สถานะ/ชื่อ/อัตรา · อนุมัติ · ลบ · แตะ Super Admin → ต้องมี ADMIN_TOKEN
+      var selfService = !!cur && !cur.deleted && cur.role !== 'super_admin' && !cur.pending && !cand.deleted
         && _sameFields(cur, cand, _PROTECTED) && !!cand.password_hash && !!cand.salt;
-      if (!selfService) { rejected.push({ username: u, reason: 'auth' }); return; }
+      var selfRegister = !cur && _isSelfRegistration(cand);
+      if (selfRegister && _pendingCount(map) >= MAX_PENDING) { rejected.push({ username: u, reason: 'full' }); return; }
+      if (!selfService && !selfRegister) { rejected.push({ username: u, reason: 'auth' }); return; }
     }
     // ห้ามทำให้ไม่เหลือ Super Admin ที่เปิดใช้งานเลย
     if (_isActiveAdmin(cur) && !_isActiveAdmin(cand) && _otherActiveAdmins(map, u) === 0) {
@@ -221,16 +256,17 @@ function _syncMembers(installId, incoming, now, isAdmin) {
   });
   var all = Object.keys(map).sort().map(function (k) { return map[k]; });
   if (applied) {
-    // เวลาเก็บเป็นข้อความเสมอ (นำหน้าด้วย ' กัน Sheet แปลงเป็น Date)
+    // เวลาเก็บเป็นข้อความเสมอ (นำหน้าด้วย ' กัน Sheet แปลงเป็น Date) · แฮช/salt ผ่าน _safeStr ด้วย — ห้ามกลายเป็นสูตร
     var out = all.map(function (r) {
       return [_safeStr(r.username), _safeStr(r.display_name), r.role, _safeStr(r.permissions), r.active,
-              r.password_hash, r.salt, r.rate_per_name == null ? '' : r.rate_per_name,
-              "'" + r.created_at, "'" + r.updated_at, r.deleted, r.rev, r.updated_by, "'" + r.received_at,
-              _safeStr(r.teams || '[]')];
+              _safeStr(r.password_hash), _safeStr(r.salt), r.rate_per_name == null ? '' : r.rate_per_name,
+              "'" + r.created_at, "'" + r.updated_at, r.deleted, r.rev, _safeStr(r.updated_by), "'" + r.received_at,
+              _safeStr(r.teams || '[]'), r.pending ? 1 : 0];
     });
-    var last = sh.getLastRow();
-    if (last >= 2) sh.getRange(2, 1, last - 1, MEMBER_COLS.length).clearContent();
+    // v3.10.0: เขียนทับก่อนแล้วค่อยล้างแถวเกิน — เดิมล้างก่อนเขียน ถ้าเขียนล้มกลางคันไดเรกทอรีทั้งชีตหายเกลี้ยง
+    var prevLast = sh.getLastRow();
     if (out.length) sh.getRange(2, 1, out.length, MEMBER_COLS.length).setValues(out);
+    if (prevLast > out.length + 1) sh.getRange(out.length + 2, 1, prevLast - out.length - 1, MEMBER_COLS.length).clearContent();
   }
   return {
     applied: applied, rejected: rejected,
@@ -238,15 +274,16 @@ function _syncMembers(installId, incoming, now, isAdmin) {
       return { username: r.username, display_name: r.display_name, role: r.role, permissions: r.permissions,
                active: r.active, password_hash: r.password_hash, salt: r.salt, rate_per_name: r.rate_per_name,
                created_at: r.created_at, updated_at: r.updated_at, deleted: r.deleted, rev: r.rev,
-               teams: r.teams || '[]' };
+               teams: r.teams || '[]', pending: r.pending ? 1 : 0 };
     })
   };
 }
 
-/** ข้อความที่ผู้ใช้ตั้งเอง (เช่น ชื่อที่แสดง) ต้องไม่กลายเป็นสูตรใน Sheet */
+/** ข้อความที่ผู้ใช้ตั้งเอง (เช่น ชื่อที่แสดง) ต้องไม่กลายเป็นสูตรใน Sheet
+ *  v3.10.0: ข้อความที่หน้าตาเป็นตัวเลข ("0123") ก็ต้องกันด้วย — ไม่งั้น Sheet แปลงเป็นเลข ชื่อผู้ใช้ '0123' กลายเป็น '123' */
 function _safeStr(v) {
   var s = String(v == null ? '' : v);
-  return /^[=+\-@]/.test(s) ? "'" + s : s;
+  return (/^[=+\-@]/.test(s) || (s !== '' && !isNaN(Number(s)))) ? "'" + s : s;
 }
 
 // ──────────────── v3.9.0: สมุดกองกลางกลาง ────────────────
@@ -339,9 +376,10 @@ function _syncLedger(installId, incoming, after, now, isAdmin) {
       return [_safeStr(r.gid), "'" + r.ts, "'" + r.ym, _safeStr(r.owner), r.kind, r.amount, _safeStr(r.note),
               _safeStr(r.created_by), r.deleted, r.rev, _safeStr(r.origin), _safeStr(r.updated_by), "'" + r.received_at];
     });
-    var last = sh.getLastRow();
-    if (last >= 2) sh.getRange(2, 1, last - 1, LEDGER_COLS.length).clearContent();
+    // v3.10.0: เขียนทับก่อนแล้วค่อยล้างแถวเกิน (เหมือนชีต members) — เขียนล้มกลางคันต้องไม่ทำให้สมุดทั้งเล่มหาย
+    var prevLast = sh.getLastRow();
     if (out.length) sh.getRange(2, 1, out.length, LEDGER_COLS.length).setValues(out);
+    if (prevLast > out.length + 1) sh.getRange(out.length + 2, 1, prevLast - out.length - 1, LEDGER_COLS.length).clearContent();
   }
   var entries = Object.keys(map).filter(function (k) { return map[k].rev > after || touched[k]; })
     .sort(function (a, b) { return map[a].rev - map[b].rev; })
@@ -476,7 +514,7 @@ function _doPostLocked(e) {
 
     // v3.7.0: ไดเรกทอรีสมาชิกกลาง — ก้อนนี้ไม่มี rows/users จึงไม่แตะตัวเลขและสถานะ
     if (data.kind === 'members' && Array.isArray(data.members)) {
-      var ms = _syncMembers(data.install_id, data.members, now, isAdmin);
+      var ms = _syncMembers(data.install_id, data.members, now, isAdmin, adminReady);
       return _json({ ok: true, ver: HUB_SCRIPT_VERSION, kind: 'members', applied: ms.applied, rejected: ms.rejected,
                      admin: isAdmin, admin_ready: adminReady, members: ms.members });
     }

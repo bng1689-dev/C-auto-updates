@@ -69,6 +69,7 @@ engine.SEARCH_HOST = f"127.0.0.1:{MPORT}"
 engine.SPEED_FACTORS = {k: 0.05 for k in range(1, 6)}
 worker.RunManager.RETRY_BACKOFF = (0, 0)
 worker.RunManager.AUTOSTART_SEC = 2
+worker.auth.update_config(autostart_enabled=True)   # v3.10.0: สวิตช์เริ่มอัตโนมัติค่าเริ่มต้นปิด — ชุดนี้ทดสอบทางเริ่มเอง
 worker.downloads_dir = lambda: DOWNLOADS
 
 

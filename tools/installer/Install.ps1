@@ -150,9 +150,19 @@ $seedDst = Join-Path $Install "app\backend\seed_account.json"
 if ((Test-Path $seedSrc) -and $freshInstall) {
     New-Item -ItemType Directory -Force -Path (Split-Path $seedDst) | Out-Null
     Copy-Item $seedSrc $seedDst -Force
-    Write-Host ("  - เตรียมบัญชีเริ่มต้น '{0}' (เข้าครั้งแรกแล้วเปลี่ยนรหัสผ่านทันที)" -f $Meta.seed_username)
+    Write-Host ("  - เตรียมบัญชีเริ่มต้น '{0}' (ใช้เฉพาะเครื่องแรกขององค์กร — เครื่องเพิ่มเติมที่เชื่อมศูนย์กลางได้จะไม่สร้างบัญชีนี้ ให้กด 'สมัครใช้งาน' หรือเข้าด้วยบัญชีเดิม · เข้าครั้งแรกแล้วเปลี่ยนรหัสผ่านทันที)" -f $Meta.seed_username)
 } elseif (Test-Path $seedDst) {
     Remove-Item $seedDst -Force -ErrorAction SilentlyContinue
+}
+# ---- v3.10.0: รหัสลับศูนย์กลางจากชุดติดตั้ง (ถ้าผู้ดูแลฝังมา) — เครื่องใหม่เชื่อมศูนย์กลางเองตอนเปิดครั้งแรก แล้วไฟล์ถูกลบ ----
+$hubSrc = Join-Path $Src "hub_seed.json"
+$hubDst = Join-Path $Install "app\backend\hub_seed.json"
+if ((Test-Path $hubSrc) -and $freshInstall) {
+    New-Item -ItemType Directory -Force -Path (Split-Path $hubDst) | Out-Null
+    Copy-Item $hubSrc $hubDst -Force
+    Write-Host "  - เตรียมการเชื่อมต่อศูนย์กลาง (เปิดโปรแกรมแล้วกด 'สมัครใช้งาน' ได้เลย)"
+} elseif (Test-Path $hubDst) {
+    Remove-Item $hubDst -Force -ErrorAction SilentlyContinue
 }
 
 # ---- ไฟล์ประกอบ: ไอคอน · ตัวถอนการติดตั้ง · ข้อมูลการติดตั้ง ----

@@ -45,12 +45,14 @@ TPL = HERE / "installer"
 VERSIONS = json.loads((TPL / "versions.json").read_text(encoding="utf-8"))
 ENV_GATE = "CRIMES_INSTALL_PASSWORD"
 ENV_SEED = "CRIMES_SEED_PASSWORD"
+ENV_HUB = "CRIMES_HUB_TOKEN"          # v3.10.0 (ไม่บังคับ): HUB_TOKEN ของศูนย์กลาง → hub_seed.json ให้เครื่องใหม่เชื่อมเอง
 PRODUCT = "CRIMES AUTO"
 PY_EMBED_URL = "https://www.python.org/ftp/python/{v}/python-{v}-embed-amd64.zip"
 # ไฟล์ที่ห้ามหลุดเข้าชุดติดตั้งเด็ดขาด (สคริปต์ศูนย์กลาง/เครื่องมือผู้ดูแล/กุญแจ)
 FORBIDDEN_SECRETS = ("hub_gas", "keygen", "crimes_license_private")
 FORBIDDEN = FORBIDDEN_SECRETS + (".key", "/tools/", "__pycache__", ".pyc")
 SEED_FILE = "seed_account.json"
+HUB_SEED_FILE = "hub_seed.json"
 INSTALL_JSON = "install.json"
 
 
@@ -432,7 +434,7 @@ def copy_templates(dist):
         b"\xef\xbb\xbf" + (TPL / "README-ติดตั้ง.txt").read_text(encoding="utf-8-sig").replace("\n", "\r\n").encode("utf-8"))
 
 
-def write_meta(dist, version, gate_pw, seed_pw, app_iter, pyver, chromium_rev):
+def write_meta(dist, version, gate_pw, seed_pw, app_iter, pyver, chromium_rev, hub_token=""):
     gate_salt = secrets.token_hex(16)
     seed_salt = secrets.token_hex(16)
     meta = {
@@ -450,6 +452,14 @@ def write_meta(dist, version, gate_pw, seed_pw, app_iter, pyver, chromium_rev):
         "note": "บัญชี Super Admin เริ่มต้นจากชุดติดตั้ง — โปรแกรมใช้ไฟล์นี้ตอนเปิดครั้งแรกที่ยังไม่มีผู้ใช้ แล้วลบทิ้งทันที",
     }
     (dist / SEED_FILE).write_text(json.dumps(seed, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    if hub_token:
+        # v3.10.0: รหัสลับศูนย์กลาง (HUB_TOKEN) — เท่ากับรหัสเชื่อมต่อที่แจกสมาชิกอยู่แล้ว (ไม่ใช่ ADMIN_TOKEN) · URL ใช้ที่ฝังในโปรแกรม
+        # โปรแกรมอ่านตอนเปิดครั้งแรกแล้วลบไฟล์ทันที · ชุดติดตั้งที่มีไฟล์นี้ต้องแจกเฉพาะคนในหน่วยงาน
+        (dist / HUB_SEED_FILE).write_text(json.dumps({"token": hub_token,
+            "note": "รหัสลับศูนย์กลางจากชุดติดตั้ง — โปรแกรมใช้ตอนเปิดครั้งแรกแล้วลบทิ้ง"}, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8")
+        meta["hub_seed"] = True
+        (dist / INSTALL_JSON).write_text(json.dumps(meta, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     return meta
 
 
@@ -483,16 +493,23 @@ def self_check(dist, version, secrets_plain, full):
         if not (dist / ps).read_bytes().startswith(b"\xef\xbb\xbf"):
             problems.append(f"{ps} ไม่มี BOM (PowerShell 5.1 จะอ่านภาษาไทยเพี้ยน)")
     # กวาดหารหัสจริง — ทุกไฟล์ที่ไม่ใช่ไบนารีขนาดใหญ่ (ไม่รวมตัว Chromium/Python เอง)
-    needles = [s.encode("utf-8") for s in secrets_plain if s]
+    # (ชื่อ, needle) — ชื่อบอกว่ารหัสไหนหลุด และให้ยกเว้นรายรหัสได้ (hub token ฝังใน config.py โดยตั้งใจ)
+    needles = [(name, s.encode("utf-8")) for name, s in zip(("gate", "seed", "hub"), secrets_plain) if s]
     for p in dist.rglob("*"):
         if not p.is_file() or p.stat().st_size > 5_000_000:
             continue
         top = p.relative_to(dist).parts[0]
         if top in ("browsers",) or (top == "runtime" and p.suffix.lower() in (".dll", ".pyd", ".exe", ".zip", ".node")):
             continue
+        if p.name == HUB_SEED_FILE:
+            continue                                # รหัสลับศูนย์กลางอยู่ในไฟล์นี้โดยตั้งใจ (เท่ากับรหัสเชื่อมต่อ) — ห้ามอยู่ที่อื่น
         data = p.read_bytes()
-        for nd in needles:
+        for name, nd in needles:
             if nd in data:
+                # v3.10.0: เจ้าของโปรเจกต์สั่ง "ฝัง HUB_TOKEN" ใน app/backend/config.py — ผู้ดูแลที่ตั้ง
+                # CRIMES_HUB_TOKEN เป็นรหัสเดียวกับที่ฝังต้องไม่ถูกตีตก (รหัสอื่นหลุดที่ไหนก็ตีตกเหมือนเดิม)
+                if name == "hub" and p.relative_to(dist).as_posix() == "app/backend/config.py":
+                    continue
                 problems.append(f"พบรหัสเป็นข้อความธรรมดาใน {p.relative_to(dist).as_posix()}")
     meta = json.loads((dist / INSTALL_JSON).read_text(encoding="utf-8"))
     seed = json.loads((dist / SEED_FILE).read_text(encoding="utf-8"))
@@ -526,12 +543,18 @@ def main(argv=None):
     ap.add_argument("--no-zip", action="store_true", help="ไม่บีบอัดเป็น zip")
     ap.add_argument("--gate-password-file", help="อ่านรหัสเริ่มติดตั้งจากไฟล์นอกรีโป (แทน env)")
     ap.add_argument("--seed-password-file", help="อ่านรหัสบัญชีเริ่มต้นจากไฟล์นอกรีโป (แทน env)")
+    ap.add_argument("--hub-token-file", help="v3.10.0 (ไม่บังคับ): อ่าน HUB_TOKEN ของศูนย์กลางจากไฟล์นอกรีโป → ฝัง hub_seed.json")
     args = ap.parse_args(argv)
 
     zip_path, version = latest_zip()
     log(f"CRIMES AUTO — สร้างชุดติดตั้งตัวเต็ม v{version} จาก {zip_path.name}")
     gate_pw = get_secret(ENV_GATE, "รหัสเริ่มติดตั้ง", args.gate_password_file)
     seed_pw = get_secret(ENV_SEED, f"รหัสผ่านบัญชี {VERSIONS['seed_username']} เริ่มต้น", args.seed_password_file)
+    hub_token = os.environ.get(ENV_HUB, "").strip()
+    if not hub_token and args.hub_token_file:
+        hub_token = Path(args.hub_token_file).read_text(encoding="utf-8").strip()
+    if hub_token and len(hub_token) < 8:
+        sys.exit(f"{ENV_HUB} สั้นเกินไป (อย่างน้อย 8 ตัว)")
 
     out_root = Path(args.out)
     dist = out_root / f"CRIMES_AUTO_Setup_v{version}"
@@ -551,10 +574,12 @@ def main(argv=None):
     log("④ สคริปต์ติดตั้ง/ถอน · ไอคอน · ข้อมูลการติดตั้ง")
     copy_templates(dist)
     write_icon(dist / "icon.ico")
-    write_meta(dist, version, gate_pw, seed_pw, app_iter, VERSIONS["python"], rev)
+    write_meta(dist, version, gate_pw, seed_pw, app_iter, VERSIONS["python"], rev, hub_token=hub_token)
     full = not (args.skip_browsers or args.skip_runtime)
-    self_check(dist, version, [gate_pw, seed_pw], full)
-    del gate_pw, seed_pw
+    self_check(dist, version, [gate_pw, seed_pw, hub_token], full)
+    log("  · " + ("ฝังรหัสลับศูนย์กลาง (hub_seed.json) — เครื่องใหม่เชื่อมศูนย์กลางเองแล้วกด 'สมัครใช้งาน' ได้เลย" if hub_token
+                  else "ไม่ได้ฝังรหัสลับศูนย์กลาง (ตั้ง CRIMES_HUB_TOKEN ถ้าต้องการ) — ผู้สมัครต้องกรอกรหัสเชื่อมต่อครั้งแรก"))
+    del gate_pw, seed_pw, hub_token
     size = sum(p.stat().st_size for p in dist.rglob("*") if p.is_file())
     log(f"✓ {dist} ({size / 1e6:,.0f} MB){'' if full else ' — ชุดทดสอบโครงสร้าง ไม่ใช่ชุดติดตั้งจริง'}")
     if not args.no_zip:
