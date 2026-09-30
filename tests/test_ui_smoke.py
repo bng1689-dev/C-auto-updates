@@ -419,8 +419,22 @@ def main():
         page.fill("#fgPw", "newpass9")
         page.fill("#fgPw2", "newpass9")
         page.click("#btnForgotSubmit")
-        page.wait_for_function(
-            "document.getElementById('authForgotErr').textContent.includes('ไม่ตรง')", timeout=8000)
+        try:
+            page.wait_for_function(
+                "document.getElementById('authForgotErr').textContent.includes('ไม่ตรง')", timeout=8000)
+        except Exception:
+            print("DEBUG forgot state:", page.evaluate(
+                """() => ({err: document.getElementById('authForgotErr').textContent,
+                           errDisp: document.getElementById('authForgotErr').style.display,
+                           u: document.getElementById('fgUser').value,
+                           cr: document.getElementById('fgCrimes').value,
+                           p1: document.getElementById('fgPw').value.length,
+                           p2: document.getElementById('fgPw2').value.length,
+                           boxHidden: document.getElementById('authForgotBox').classList.contains('hidden'),
+                           active: document.activeElement && document.activeElement.id,
+                           appShown: !document.getElementById('screen-app').classList.contains('hidden'),
+                           valid: document.getElementById('authForgotForm').checkValidity()})"""))
+            raise
         check("ชื่อ CRIMES ไม่ตรง → แจ้งบนหน้า ไม่หลุดออก", True)
         page.fill("#fgCrimes", " SOMCHAI.c ")
         page.click("#btnForgotSubmit")
