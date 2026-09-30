@@ -24,6 +24,7 @@
  *    เครื่องที่มีแค่ HUB_TOKEN (ทุกเครื่องมี — อยู่ในรหัสเชื่อมต่อที่แจกสมาชิก) ทำได้แค่ดึงไดเรกทอรี และส่ง
  *    "รหัสผ่านใหม่ของสมาชิกธรรมดาที่มีอยู่แล้ว" (เปลี่ยนรหัสตัวเอง/ลืมรหัส) — ส่งอย่างอื่นมาจะถูกปัดตก (reason "auth")
  *    ข้อยกเว้นเดียว: ไดเรกทอรีว่างเปล่า = เครื่องแรกขององค์กรกำลังตั้งค่า รับได้ทั้งก้อน
+ *    (v3.10.0: ถ้าตั้ง ADMIN_TOKEN ในสคริปต์แล้ว ก้อนแรกก็ต้องเซ็นผู้ดูแล — รหัสร่วมฝังในโปรแกรมสาธารณะแล้ว)
  *  • ไม่รับการแก้ที่ทำให้ไม่เหลือ Super Admin ที่เปิดใช้งานเลย (reason "last_admin") — สองเครื่องปิดกันเองพร้อมกัน
  *    ก็ไม่ทำให้ทั้งองค์กรล็อกตัวเองออก
  *
@@ -214,11 +215,13 @@ function _otherActiveAdmins(map, except) {
 }
 
 /** v3.7.0: รับแถวที่เครื่องลูกแก้ → ตรวจ rev / สิทธิ์ / Super Admin คนสุดท้าย → คืนทั้งไดเรกทอรี + รายการที่ปัดตก
- *  isAdmin = ก้อนนี้เซ็นด้วย ADMIN_TOKEN ถูกต้อง (เครื่องของ Super Admin) */
-function _syncMembers(installId, incoming, now, isAdmin) {
+ *  isAdmin = ก้อนนี้เซ็นด้วย ADMIN_TOKEN ถูกต้อง (เครื่องของ Super Admin) · adminReady = สคริปต์ตั้ง ADMIN_TOKEN แล้ว */
+function _syncMembers(installId, incoming, now, isAdmin, adminReady) {
   var sh = _membersSheet();
   var map = _readMembers(sh);
-  var bootstrap = Object.keys(map).length === 0;      // ไดเรกทอรีว่าง = เครื่องแรกขององค์กรกำลังตั้งค่า
+  // ไดเรกทอรีว่าง = เครื่องแรกขององค์กรกำลังตั้งค่า — v3.10.0: ถ้าสคริปต์ตั้ง ADMIN_TOKEN แล้ว ก้อนแรกต้องเซ็นผู้ดูแลด้วย
+  // (รหัสร่วมเป็นสาธารณะตั้งแต่ฝังในโปรแกรม — ห้ามให้คนนอกยึดไดเรกทอรีที่เพิ่งถูกล้าง/สร้างใหม่ด้วยรหัสร่วมอย่างเดียว)
+  var bootstrap = Object.keys(map).length === 0 && (isAdmin || !adminReady);
   var nowText = _isoText(now);
   var applied = 0, rejected = [];
   (incoming || []).forEach(function (m) {
@@ -511,7 +514,7 @@ function _doPostLocked(e) {
 
     // v3.7.0: ไดเรกทอรีสมาชิกกลาง — ก้อนนี้ไม่มี rows/users จึงไม่แตะตัวเลขและสถานะ
     if (data.kind === 'members' && Array.isArray(data.members)) {
-      var ms = _syncMembers(data.install_id, data.members, now, isAdmin);
+      var ms = _syncMembers(data.install_id, data.members, now, isAdmin, adminReady);
       return _json({ ok: true, ver: HUB_SCRIPT_VERSION, kind: 'members', applied: ms.applied, rejected: ms.rejected,
                      admin: isAdmin, admin_ready: adminReady, members: ms.members });
     }

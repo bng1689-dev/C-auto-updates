@@ -52,13 +52,13 @@ def check(name, cond, detail=""):
         print(f"  ✗ {name} {detail}")
 
 
-def raw_post(payload, tok=TOKEN, admin_token=None, script_admin=ADMIN):
+def raw_post(payload, tok=TOKEN, admin_token=None, script_admin=ADMIN, state=None):
     body = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
     param = {"sign": hub.sign(body.encode("utf-8"), tok)}
     if admin_token:
         param["asign"] = hub.sign(body.encode("utf-8"), admin_token)
     req = {"method": "POST", "body": body, "parameter": param}
-    r = subprocess.run(["node", str(HERE / "gas_harness.js"), str(STATE), TOKEN, script_admin],
+    r = subprocess.run(["node", str(HERE / "gas_harness.js"), str(state or STATE), TOKEN, script_admin],
                        input=json.dumps(req), capture_output=True, text=True, timeout=60)
     if r.returncode:
         raise RuntimeError("harness: " + r.stderr[-300:])
@@ -356,6 +356,15 @@ def main():
     auth.update_config(hub_admin_token=ADMIN)
     r = c.post(f"/api/admin/members/{uid_g}/approve", json={"role": "member"})
     check("ใส่รหัสผู้ดูแลแล้วอนุมัติได้ตามเดิม", r.status_code == 200 and db.get_user(uid_g)["active"] == 1, str(r.get_json()))
+    # v3.10.0: ชีตว่าง + สคริปต์ตั้ง ADMIN_TOKEN แล้ว → ก้อนแรกต้องเซ็นผู้ดูแล (รีวิว Codex PR #36 —
+    # รหัสร่วมสาธารณะห้ามใช้ยึดไดเรกทอรีที่เพิ่งถูกล้าง/สร้างใหม่) · สคริปต์ที่ยังไม่ตั้ง ADMIN_TOKEN รับแบบเดิม (test_v370 ครอบ)
+    empty2 = TEST_DATA / "hub_empty2.json"
+    first = dict(base, username="firstadmin", role="super_admin", active=1, pending=0)
+    r_no = raw_post({"kind": "members", "install_id": "boot", "members": [first]}, state=empty2)
+    r_ok = raw_post({"kind": "members", "install_id": "boot", "members": [first]}, admin_token=ADMIN, state=empty2)
+    check("ชีตว่าง + สคริปต์มี ADMIN_TOKEN: ก้อนแรกด้วยรหัสร่วมล้วน → auth · เซ็นผู้ดูแล → รับ",
+          r_no.get("rejected") == [{"username": "firstadmin", "reason": "auth"}] and r_ok.get("applied") == 1,
+          f"{r_no.get('rejected')} {r_ok.get('applied')}")
 
     print(f"\nผล: ผ่าน {PASS} · ตก {FAIL}")
     return 1 if FAIL else 0
