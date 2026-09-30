@@ -52,6 +52,16 @@ for _p in (str(APP), str(APP / "backend")):
     if _p not in sys.path:
         sys.path.insert(0, _p)
 
+# v3.10.0: ไฟล์ seed ค้างในโฟลเดอร์แอป (การรันชุดทดสอบครั้งก่อนถูกฆ่ากลางคัน) ทำให้ suite ถัดไป
+# 'เชื่อมศูนย์กลาง' ด้วยรหัสทดสอบตอน import server → ห้าม: เก็บกวาดก่อนเสมอ
+# ยกเว้นโปรเซสที่กำลังทดสอบการอ่าน seed อยู่จริง (tests/_hub_machine.py ตั้ง CRIMES_KEEP_SEED=1)
+if not os.environ.get("CRIMES_KEEP_SEED"):
+    for _n in ("seed_account.json", "hub_seed.json"):
+        try:
+            (APP / "backend" / _n).unlink()
+        except FileNotFoundError:
+            pass
+
 
 def _chrome():
     c = os.environ.get("CRIMES_TEST_CHROME")

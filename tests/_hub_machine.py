@@ -15,6 +15,7 @@ data_dir, state_file, token = sys.argv[1:4]
 script_admin = sys.argv[4] if len(sys.argv) > 4 else ""
 os.environ["CRIMES_DATA_DIR"] = data_dir
 os.environ["CRIMES_UPLOAD_DIR"] = str(Path(data_dir) / "up")
+os.environ["CRIMES_KEEP_SEED"] = "1"     # เครื่องจำลองอาจกำลังทดสอบไฟล์ seed ที่เพิ่งถูกวาง — _app ห้ามเก็บกวาดทิ้ง
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 from _app import APP  # noqa: E402,F401
