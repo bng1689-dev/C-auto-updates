@@ -493,7 +493,8 @@ def self_check(dist, version, secrets_plain, full):
         if not (dist / ps).read_bytes().startswith(b"\xef\xbb\xbf"):
             problems.append(f"{ps} ไม่มี BOM (PowerShell 5.1 จะอ่านภาษาไทยเพี้ยน)")
     # กวาดหารหัสจริง — ทุกไฟล์ที่ไม่ใช่ไบนารีขนาดใหญ่ (ไม่รวมตัว Chromium/Python เอง)
-    needles = [s.encode("utf-8") for s in secrets_plain if s]
+    # (ชื่อ, needle) — ชื่อบอกว่ารหัสไหนหลุด และให้ยกเว้นรายรหัสได้ (hub token ฝังใน config.py โดยตั้งใจ)
+    needles = [(name, s.encode("utf-8")) for name, s in zip(("gate", "seed", "hub"), secrets_plain) if s]
     for p in dist.rglob("*"):
         if not p.is_file() or p.stat().st_size > 5_000_000:
             continue
@@ -503,8 +504,12 @@ def self_check(dist, version, secrets_plain, full):
         if p.name == HUB_SEED_FILE:
             continue                                # รหัสลับศูนย์กลางอยู่ในไฟล์นี้โดยตั้งใจ (เท่ากับรหัสเชื่อมต่อ) — ห้ามอยู่ที่อื่น
         data = p.read_bytes()
-        for nd in needles:
+        for name, nd in needles:
             if nd in data:
+                # v3.10.0: เจ้าของโปรเจกต์สั่ง "ฝัง HUB_TOKEN" ใน app/backend/config.py — ผู้ดูแลที่ตั้ง
+                # CRIMES_HUB_TOKEN เป็นรหัสเดียวกับที่ฝังต้องไม่ถูกตีตก (รหัสอื่นหลุดที่ไหนก็ตีตกเหมือนเดิม)
+                if name == "hub" and p.relative_to(dist).as_posix() == "app/backend/config.py":
+                    continue
                 problems.append(f"พบรหัสเป็นข้อความธรรมดาใน {p.relative_to(dist).as_posix()}")
     meta = json.loads((dist / INSTALL_JSON).read_text(encoding="utf-8"))
     seed = json.loads((dist / SEED_FILE).read_text(encoding="utf-8"))

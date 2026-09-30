@@ -30,7 +30,8 @@ jobs:
         env:
           CRIMES_INSTALL_PASSWORD: ${{ secrets.INSTALLER_GATE_PASSWORD }}
           CRIMES_SEED_PASSWORD: ${{ secrets.INSTALLER_SEED_PASSWORD }}
-          # v3.10.0 (ไม่บังคับ): HUB_TOKEN ของศูนย์กลาง → ชุดติดตั้งฝัง hub_seed.json ให้เครื่องใหม่เชื่อมศูนย์กลางเอง (URL ฝังในโปรแกรมแล้ว)
+          # v3.10.0 (ไม่บังคับ): ปกติไม่ต้องตั้ง — HUB_TOKEN ขององค์กรฝังในโปรแกรมแล้ว (backend/config.py)
+          # ตั้ง secret นี้เฉพาะเมื่อชุดติดตั้งต้องใช้ศูนย์กลาง/รหัสอื่น → ฝังเป็น hub_seed.json (ค่าจากไฟล์ทับค่าฝัง)
           CRIMES_HUB_TOKEN: ${{ secrets.INSTALLER_HUB_TOKEN }}
         run: |
           if [ -z "$CRIMES_INSTALL_PASSWORD" ] || [ -z "$CRIMES_SEED_PASSWORD" ]; then

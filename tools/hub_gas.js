@@ -126,6 +126,7 @@ function _normTeams(v) {
   if (!Array.isArray(v)) v = [];
   var seen = {}, out = [];
   v.forEach(function (it) {
+    if (out.length >= 50) return;      // v3.10.0: เพดานทีมต่อคน — กันสตริงยาวจนเขียนชีตล้ม
     var name, rate;
     if (it && typeof it === 'object' && !Array.isArray(it)) { name = it.name; rate = (it.rate === undefined) ? it.rate_per_name : it.rate; }
     else if (Array.isArray(it)) { name = it[0]; rate = it[1]; }
@@ -163,27 +164,34 @@ function _readMembers(sh) {
 /** แถวที่เครื่องลูกส่งมา → รูปแบบมาตรฐานเดียวกับที่เก็บ (บทบาทมีแค่ 2 ค่า · ตัวเลข/ข้อความสะอาด) */
 function _memberCandidate(m, u, cur, nowText) {
   var upd = _isoText(m.updated_at) || nowText;
-  return {
-    username: u, display_name: String(m.display_name == null ? '' : m.display_name),
+  var cand = {
+    // v3.10.0: จำกัดความยาวทุกช่องข้อความ — เซลล์ของ Sheet รับได้ 50,000 ตัว ถ้าปล่อยยาวไม่จำกัด
+    // การเขียนทั้งชีตจะล้มกลางคัน (คนถือรหัสร่วมยัดชื่อยาว ๆ มากับคำขอสมัครได้)
+    username: u, display_name: String(m.display_name == null ? '' : m.display_name).slice(0, 80),
     role: (m.role === 'super_admin') ? 'super_admin' : 'member',
-    permissions: (typeof m.permissions === 'string') ? m.permissions : JSON.stringify(m.permissions || {}),
+    permissions: ((typeof m.permissions === 'string') ? m.permissions : JSON.stringify(m.permissions || {})).slice(0, 2000),
     active: Number(m.active) ? 1 : 0,
-    password_hash: String(m.password_hash == null ? '' : m.password_hash),
-    salt: String(m.salt == null ? '' : m.salt),
+    password_hash: String(m.password_hash == null ? '' : m.password_hash).slice(0, 200),
+    salt: String(m.salt == null ? '' : m.salt).slice(0, 200),
     rate_per_name: (m.rate_per_name === '' || m.rate_per_name == null) ? null : Number(m.rate_per_name),
-    created_at: _isoText(m.created_at) || (cur && cur.created_at) || upd,
-    updated_at: upd, deleted: Number(m.deleted) ? 1 : 0,
+    created_at: _isoText(m.created_at).slice(0, 19) || (cur && cur.created_at) || upd,
+    updated_at: upd.slice(0, 19), deleted: Number(m.deleted) ? 1 : 0,
     // โปรแกรมรุ่นก่อน 3.9.0 ไม่ส่ง teams มา (undefined) → คงทีมเดิมไว้ ไม่ใช่ล้างทิ้ง
     teams: (m.teams === undefined || m.teams === null) ? ((cur && cur.teams) || '[]') : _normTeams(m.teams),
     // v3.10.0: รุ่นก่อน 3.10.0 ไม่ส่ง pending → คงค่าเดิม · คำขอ (pending) ต้องไม่เปิดใช้งาน
     pending: (m.pending === undefined || m.pending === null) ? ((cur && cur.pending) || 0) : (Number(m.pending) ? 1 : 0)
   };
+  // เปิดใช้งานแล้ว = ไม่ใช่คำขอ (เครื่อง Super Admin รุ่นเก่าที่ไม่รู้จัก pending สั่ง active=1 ก็เท่ากับอนุมัติ)
+  if (cand.active) cand.pending = 0;
+  return cand;
 }
 function _isSelfRegistration(cand) {
-  // แถวใหม่แบบ 'คำขอสมัคร': สมาชิกธรรมดา ไม่มีสิทธิ์ ไม่มีทีม ยังไม่เปิดใช้งาน มีแฮชรหัสผ่าน
+  // แถวใหม่แบบ 'คำขอสมัคร': สมาชิกธรรมดา ไม่มีสิทธิ์ ไม่มีทีม ยังไม่เปิดใช้งาน มีแฮชรหัสผ่านหน้าตาถูกต้อง
+  // (v3.10.0: แฮช/salt ต้องเป็น hex จริง — กันคนถือรหัสร่วมยัดสูตร/ข้อความเพี้ยนที่ทำให้เครื่องอื่นล้มตอนเทียบรหัส)
   var perms = String(cand.permissions || '{}').replace(/\s/g, '');
   return !!cand.pending && !cand.active && cand.role === 'member' && !cand.deleted
-    && !!cand.password_hash && !!cand.salt && (perms === '{}' || perms === 'null') && _normTeams(cand.teams) === '[]'
+    && /^[0-9a-f]{64}$/.test(String(cand.password_hash)) && /^[0-9a-f]{16,64}$/.test(String(cand.salt))
+    && (perms === '{}' || perms === 'null') && _normTeams(cand.teams) === '[]'
     && (cand.rate_per_name === null || cand.rate_per_name === undefined);
 }
 function _pendingCount(map) {
@@ -245,16 +253,17 @@ function _syncMembers(installId, incoming, now, isAdmin) {
   });
   var all = Object.keys(map).sort().map(function (k) { return map[k]; });
   if (applied) {
-    // เวลาเก็บเป็นข้อความเสมอ (นำหน้าด้วย ' กัน Sheet แปลงเป็น Date)
+    // เวลาเก็บเป็นข้อความเสมอ (นำหน้าด้วย ' กัน Sheet แปลงเป็น Date) · แฮช/salt ผ่าน _safeStr ด้วย — ห้ามกลายเป็นสูตร
     var out = all.map(function (r) {
       return [_safeStr(r.username), _safeStr(r.display_name), r.role, _safeStr(r.permissions), r.active,
-              r.password_hash, r.salt, r.rate_per_name == null ? '' : r.rate_per_name,
-              "'" + r.created_at, "'" + r.updated_at, r.deleted, r.rev, r.updated_by, "'" + r.received_at,
+              _safeStr(r.password_hash), _safeStr(r.salt), r.rate_per_name == null ? '' : r.rate_per_name,
+              "'" + r.created_at, "'" + r.updated_at, r.deleted, r.rev, _safeStr(r.updated_by), "'" + r.received_at,
               _safeStr(r.teams || '[]'), r.pending ? 1 : 0];
     });
-    var last = sh.getLastRow();
-    if (last >= 2) sh.getRange(2, 1, last - 1, MEMBER_COLS.length).clearContent();
+    // v3.10.0: เขียนทับก่อนแล้วค่อยล้างแถวเกิน — เดิมล้างก่อนเขียน ถ้าเขียนล้มกลางคันไดเรกทอรีทั้งชีตหายเกลี้ยง
+    var prevLast = sh.getLastRow();
     if (out.length) sh.getRange(2, 1, out.length, MEMBER_COLS.length).setValues(out);
+    if (prevLast > out.length + 1) sh.getRange(out.length + 2, 1, prevLast - out.length - 1, MEMBER_COLS.length).clearContent();
   }
   return {
     applied: applied, rejected: rejected,
@@ -267,10 +276,11 @@ function _syncMembers(installId, incoming, now, isAdmin) {
   };
 }
 
-/** ข้อความที่ผู้ใช้ตั้งเอง (เช่น ชื่อที่แสดง) ต้องไม่กลายเป็นสูตรใน Sheet */
+/** ข้อความที่ผู้ใช้ตั้งเอง (เช่น ชื่อที่แสดง) ต้องไม่กลายเป็นสูตรใน Sheet
+ *  v3.10.0: ข้อความที่หน้าตาเป็นตัวเลข ("0123") ก็ต้องกันด้วย — ไม่งั้น Sheet แปลงเป็นเลข ชื่อผู้ใช้ '0123' กลายเป็น '123' */
 function _safeStr(v) {
   var s = String(v == null ? '' : v);
-  return /^[=+\-@]/.test(s) ? "'" + s : s;
+  return (/^[=+\-@]/.test(s) || (s !== '' && !isNaN(Number(s)))) ? "'" + s : s;
 }
 
 // ──────────────── v3.9.0: สมุดกองกลางกลาง ────────────────
@@ -363,9 +373,10 @@ function _syncLedger(installId, incoming, after, now, isAdmin) {
       return [_safeStr(r.gid), "'" + r.ts, "'" + r.ym, _safeStr(r.owner), r.kind, r.amount, _safeStr(r.note),
               _safeStr(r.created_by), r.deleted, r.rev, _safeStr(r.origin), _safeStr(r.updated_by), "'" + r.received_at];
     });
-    var last = sh.getLastRow();
-    if (last >= 2) sh.getRange(2, 1, last - 1, LEDGER_COLS.length).clearContent();
+    // v3.10.0: เขียนทับก่อนแล้วค่อยล้างแถวเกิน (เหมือนชีต members) — เขียนล้มกลางคันต้องไม่ทำให้สมุดทั้งเล่มหาย
+    var prevLast = sh.getLastRow();
     if (out.length) sh.getRange(2, 1, out.length, LEDGER_COLS.length).setValues(out);
+    if (prevLast > out.length + 1) sh.getRange(out.length + 2, 1, prevLast - out.length - 1, LEDGER_COLS.length).clearContent();
   }
   var entries = Object.keys(map).filter(function (k) { return map[k].rev > after || touched[k]; })
     .sort(function (a, b) { return map[a].rev - map[b].rev; })

@@ -18,6 +18,11 @@ import os
 import sys
 from pathlib import Path
 
+# v3.10.0: รหัสลับศูนย์กลางฝังในโปรแกรม (config.DEFAULT_HUB_TOKEN) ทำให้เครื่องจริง "เชื่อมศูนย์กลาง" ตั้งแต่ติดตั้ง
+# ชุดทดสอบห้ามยิงศูนย์กลางจริงเด็ดขาด → ปิดค่าฝังนี้ก่อน import โค้ดแอปเสมอ (ไฟล์นี้คือด่านแรกของทุกไฟล์ทดสอบ)
+# ไฟล์ทดสอบที่ต้องการทดลองพฤติกรรม 'ฝังรหัส' ให้ตั้ง config/token เองกับศูนย์กลางจำลอง
+os.environ.setdefault("CRIMES_NO_DEFAULT_HUB", "1")
+
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "tools"))
 import pkg  # noqa: E402  (ตำแหน่ง/การแตกแพ็กเกจ — ใช้ร่วมกับ tools/release.py)

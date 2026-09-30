@@ -135,9 +135,9 @@ def main():
     check("B: สมัครโดยไม่ใส่รหัสเชื่อมต่อ → 400 need_hub_code · รหัสผิด → 400", out["reg_nocode"][0] == 400 and out["reg_nocode"][1].get("need_hub_code") is True
           and out["reg_badcode"][0] == 400, f"{out['reg_nocode']} {out['reg_badcode']}")
     check("B: ชื่อสั้น/รหัสไม่ตรง → 400", out["reg_short"][0] == 400 and out["reg_mismatch"][0] == 400)
-    check("B: สมัครพร้อมรหัสเชื่อมต่อ → ok pending · เครื่องเชื่อมศูนย์กลางแล้ว (URL ฝัง) · ยังถือว่ายังไม่ตั้งค่า (มีแต่คำขอ)",
+    check("B: สมัครพร้อมรหัสเชื่อมต่อ → ok pending · เครื่องเชื่อมศูนย์กลาง + ได้ไดเรกทอรีทันที (ตรวจรหัสก่อนรับคำขอ)",
           out["reg_ok"][0] == 200 and out["reg_ok"][1].get("pending") is True and out["st1"]["hub"]["connected"] is True
-          and out["st1"]["register_needs_token"] is False and out["st1"]["configured"] is False, str(out["reg_ok"]))
+          and out["st1"]["register_needs_token"] is False and out["st1"]["configured"] is True, str(out["st1"]))
     check("B: สมัครชื่อซ้ำ (คำขอเดิมยังรอ) → 400 'รอ Super Admin อนุมัติ'",
           out["reg_dup"][0] == 400 and "รอ Super Admin" in out["reg_dup"][1].get("error", ""), str(out["reg_dup"]))
     check("B: ล็อกอินก่อนอนุมัติ (รหัสถูก) → 403 'รออนุมัติ' · รหัสผิด → 401 ธรรมดา (ไม่เผยว่ามีคำขอ)",
@@ -208,9 +208,9 @@ def main():
     out = machine_b([{"op": "register", "u": "gguest", "p": "pass66", "code": code, "as": "reg"},
                      {"op": "post", "path": "/api/setup", "json": {"username": "rogue", "password": "secret9", "password2": "secret9"}, "as": "own"},
                      {"op": "user", "u": "rogue"}, {"op": "auth_state"}], data="G")
-    check("เครื่อง G (สมัครไว้ มีรหัสลับแล้ว มีแต่คำขอ): /api/setup → 400 org_exists ไม่สร้างบัญชี",
-          out["reg"][0] == 200 and out["own"][0] == 400 and out["own"][1].get("org_exists") is True and out["user"] is None
-          and out["auth_state"]["configured"] is False, str(out["own"]))
+    check("เครื่อง G (สมัครไว้): ได้ไดเรกทอรีมาแล้ว (configured) → /api/setup ถูกปิด (400) ไม่สร้างบัญชี rogue",
+          out["reg"][0] == 200 and out["own"][0] == 400 and out["user"] is None
+          and out["auth_state"]["configured"] is True, str(out["own"]))
     out = machine_b([{"op": "post", "path": "/api/setup", "json": {"username": "rogue", "password": "secret9", "password2": "secret9", "hub_code": code}, "as": "code"},
                      {"op": "post", "path": "/api/setup", "json": {"username": "rogue", "password": "secret9", "password2": "secret9", "hub_code": code,
                                                                   "hub_admin_token": "wrong-admin-token"}, "as": "badadm"},
@@ -295,6 +295,67 @@ def main():
           out["user"] and out["user"]["role"] == "super_admin" and out["login_full"][0] == 200 and not seed_path.exists(), str(out))
     check("hub_seed.json เสีย → ลบทิ้ง ไม่เชื่อม", (hub_seed_path.write_text("{bad", encoding="utf-8") or True)
           and server._consume_hub_seed() is False and not hub_seed_path.exists())
+
+    print("\n── ฝังรหัสลับ (เจ้าของสั่ง) · สวิตช์เริ่มอัตโนมัติ · จดจำการเข้าใช้งาน · อนุมัติเฉพาะเครื่องผู้จัดการ ──")
+    src_cfg = (APP / "backend" / "config.py").read_text(encoding="utf-8")
+    check("รหัสลับศูนย์กลางฝังใน config.py พร้อมช่องปิดสำหรับชุดทดสอบ (CRIMES_NO_DEFAULT_HUB)",
+          "DEFAULT_HUB_TOKEN" in src_cfg and "CRIMES_NO_DEFAULT_HUB" in src_cfg)
+    env2 = dict(os.environ, CRIMES_DATA_DIR=str(TEST_DATA / "tok"), CRIMES_UPLOAD_DIR=str(TEST_DATA / "tok_up"))
+    env2.pop("CRIMES_NO_DEFAULT_HUB", None)
+    code_py = ("import sys, json;"
+               f"sys.path.insert(0, {json.dumps(str(APP))}); sys.path.insert(0, {json.dumps(str(APP / 'backend'))});"
+               "import config, auth; cfg = auth.load_config();"
+               "print(int(bool(config.DEFAULT_HUB_TOKEN) and len(config.DEFAULT_HUB_TOKEN) >= 16),"
+               " int(cfg['hub_token'] == config.DEFAULT_HUB_TOKEN and cfg['hub_enabled'] is True"
+               " and cfg['hub_url'] == config.DEFAULT_HUB_URL and int(cfg['hub_interval_min']) == 1))")
+    r2 = subprocess.run([sys.executable, "-c", code_py], env=env2, capture_output=True, text=True, timeout=60)
+    check("เครื่องจริง (ไม่มี env ทดสอบ): config ใหม่ได้รหัสลับฝัง + เปิดซิงก์เองทุก 1 นาที",
+          r2.stdout.split() == ["1", "1"], (r2.stdout + r2.stderr)[-300:])
+    src_desk = (APP / "desktop.py").read_text(encoding="utf-8")
+    check("จดจำการเข้าใช้งาน: หน้าต่างแอปไม่เปิดแบบ private (private_mode=False — คุกกี้ 30 วันอยู่ข้ามการปิดโปรแกรม)",
+          "private_mode=False" in src_desk and "storage_path" in src_desk)
+    html = (APP / "frontend" / "index.html").read_text(encoding="utf-8")
+    check("หน้าเข้าสู่ระบบจำชื่อผู้ใช้ล่าสุด + สถานะติ๊กจดจำ (localStorage — ไม่เก็บรหัสผ่าน)",
+          "crimes_last_login_user" in html and "crimes_login_remember" in html and "prefillLogin" in html
+          and "rgPw'" not in html.split("localStorage.setItem")[0][-200:])
+    s0 = c.get("/api/settings").get_json()
+    c.post("/api/settings", json={"autostart_enabled": True})
+    s1 = c.get("/api/settings").get_json()
+    c.post("/api/settings", json={"autostart_enabled": False})
+    check("Setting: สวิตช์เริ่มอัตโนมัติ — ค่าเริ่มต้นปิด · เปิดแล้วจำค่า · ปิดกลับได้",
+          s0.get("autostart_enabled") is False and s1.get("autostart_enabled") is True
+          and c.get("/api/settings").get_json().get("autostart_enabled") is False, f"{s0.get('autostart_enabled')} {s1.get('autostart_enabled')}")
+    # กติกาศูนย์กลางที่แข็งขึ้น (สคริปต์ 3.10.0)
+    res = push_raw([dict(base, username="evil7", salt="ZZ" * 16)])
+    check("รหัสร่วม: salt ไม่ใช่ hex → rejected auth (กันแถวที่ทำให้เครื่องอื่นล้มตอนเทียบรหัสผ่าน)",
+          res.get("rejected") == [{"username": "evil7", "reason": "auth"}], str(res.get("rejected")))
+    res = push_raw([dict(base, username="0123456", pending=0, active=1)], admin_token=ADMIN)
+    check("ชื่อผู้ใช้ตัวเลขล้วน '0123456' ไม่ถูกชีตแปลงเป็นเลข (ศูนย์นำหน้าอยู่ครบ)",
+          res.get("applied") == 1 and "0123456" in hub_members(), str(res))
+    res = push_raw([dict(base, username="longname", display_name="ย" * 500, pending=0, active=1)], admin_token=ADMIN)
+    check("ชื่อที่แสดงยาวผิดปกติถูกตัดที่ 80 ตัว (กันการเขียนชีตล้มทั้งใบ)",
+          res.get("applied") == 1 and len(hub_members()["longname"]["display_name"]) == 80, str(res))
+    check("แถวที่ active=1 ไม่มีทางค้าง pending (เครื่องผู้ดูแลรุ่นเก่าเปิดใช้งาน = อนุมัติ)",
+          hub_members()["longname"]["pending"] == 0)
+    # เพดานคำขอค้างในเครื่อง (กันสแปมเครื่องเดียว — ศูนย์กลางมีเพดาน 200 ของตัวเอง)
+    for i in range(20):
+        db.register_user(f"cap{i:02d}", "pass99")
+    r = c.post("/api/register", json={"username": "capover", "password": "pass99", "password2": "pass99"})
+    check("เครื่องเดียวมีคำขอค้างถึง 20 → สมัครเพิ่มไม่ได้ (400)", r.status_code == 400
+          and "ค้าง" in (r.get_json() or {}).get("error", ""), str(r.get_json()))
+    with db.get_conn() as conn:
+        conn.execute("DELETE FROM users WHERE username LIKE 'cap%'")
+    # อนุมัติ/ปฏิเสธ = งานของเครื่องผู้จัดการ (มีรหัสผู้ดูแล) — เหมือนทีม/กองกลาง v3.9.1
+    uid_g = db.register_user("gatecheck", "pass88")
+    auth.update_config(hub_admin_token="")
+    r = c.post(f"/api/admin/members/{uid_g}/approve", json={})
+    rd = c.delete(f"/api/admin/members/{uid_g}")
+    check("เครื่อง Super Admin ที่ไม่มีรหัสผู้ดูแล: อนุมัติ/ปฏิเสธคำขอไม่ได้ (403 need_admin_token)",
+          r.status_code == 403 and (r.get_json() or {}).get("need_admin_token") is True
+          and rd.status_code == 403 and (rd.get_json() or {}).get("need_admin_token") is True, f"{r.status_code} {rd.status_code}")
+    auth.update_config(hub_admin_token=ADMIN)
+    r = c.post(f"/api/admin/members/{uid_g}/approve", json={"role": "member"})
+    check("ใส่รหัสผู้ดูแลแล้วอนุมัติได้ตามเดิม", r.status_code == 200 and db.get_user(uid_g)["active"] == 1, str(r.get_json()))
 
     print(f"\nผล: ผ่าน {PASS} · ตก {FAIL}")
     return 1 if FAIL else 0
