@@ -367,6 +367,16 @@ def main():
     check("สมาชิกกดปุ่มซิงก์ไม่ได้ (403) แต่ขอดึงเบื้องหลังได้", sc.post("/api/hub/ledger/sync").status_code == 403 and sc.post("/api/hub/ledger/pull").get_json().get("enabled") is True)
     st = c.get("/api/hub/state").get_json()
     check("hub/state มีผลซิงก์สมุดกองกลาง + รายการฟิลด์", st.get("ledger", {}).get("ok") is True and st.get("ledger_fields") == list(hub.LEDGER_FIELDS))
+    check("v3.9.2: hub/state บอกรุ่นสคริปต์ที่ Deploy อยู่จริง (จาก ver ในคำตอบ) ตรงกับที่โปรแกรมต้องการ",
+          st.get("script", {}).get("ver") == hub.HUB_SCRIPT_REQUIRED and st.get("script_required") == hub.HUB_SCRIPT_REQUIRED, str(st.get("script")))
+    real_post = server.hub._post
+    server.hub._post = lambda u, p, t, admin_token=None: {"ok": True, "stored": 0, "kind": p.get("kind")}   # สคริปต์รุ่นเก่า: ไม่มี ver
+    server._hub_push_now()
+    check("สคริปต์รุ่นเก่า (ตอบ ok แต่ไม่มี ver) → hub/state script.ver='old' (หน้าตั้งค่าบอกให้ Deploy รุ่นใหม่)",
+          c.get("/api/hub/state").get_json().get("script", {}).get("ver") == "old")
+    server.hub._post = real_post
+    server._hub_push_now()
+    check("กลับมาสคริปต์จริง → รุ่นกลับมาถูกต้อง", c.get("/api/hub/state").get_json().get("script", {}).get("ver") == hub.HUB_SCRIPT_REQUIRED)
     check("ไม่มี endpoint กระดานจากศูนย์กลางแบบเก่าแล้ว (หน้ากองกลางไม่ยิงศูนย์กลางทุก 8 วิ)", c.get("/api/hub/board").status_code == 404)
 
     print("\n── ทีมซิงก์ผ่านไดเรกทอรีสมาชิก (\"เครื่อง Superadmin เป็นผู้จัดการทุกสิทธิ์ได้\") ──")
