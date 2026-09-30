@@ -70,6 +70,9 @@
  * (คนที่เข้าถึงไฟล์ในเครื่องของ Super Admin ได้ ย่อมทำได้เท่า Super Admin ของเครื่องนั้นอยู่แล้ว — ขอบเขตเดิม)
  */
 
+// v3.9.2: รุ่นของสคริปต์นี้ — ส่งกลับในทุกคำตอบ (ver) ให้โปรแกรมโชว์ว่า Deploy รุ่นไหนอยู่จริง (รุ่นเก่าไม่ส่ง = 'รุ่นเก่า')
+var HUB_SCRIPT_VERSION = '3.9.2';
+
 var HUB_TOKEN = 'เปลี่ยนรหัสนี้ก่อนใช้งานจริง';
 // v3.7.0: รหัสผู้ดูแลศูนย์กลาง — เซ็นก้อน members ที่ "แก้ไดเรกทอรี" (ดูกติกาด้านบน) · ต้องต่างจาก HUB_TOKEN
 // ยังเป็นค่าตั้งต้นอยู่ = ศูนย์กลางยังไม่รับการแก้ไดเรกทอรีจากเครื่องไหนเลย (โปรแกรมจะบอกผู้ดูแลให้มาตั้ง)
@@ -474,13 +477,13 @@ function _doPostLocked(e) {
     // v3.7.0: ไดเรกทอรีสมาชิกกลาง — ก้อนนี้ไม่มี rows/users จึงไม่แตะตัวเลขและสถานะ
     if (data.kind === 'members' && Array.isArray(data.members)) {
       var ms = _syncMembers(data.install_id, data.members, now, isAdmin);
-      return _json({ ok: true, kind: 'members', applied: ms.applied, rejected: ms.rejected,
+      return _json({ ok: true, ver: HUB_SCRIPT_VERSION, kind: 'members', applied: ms.applied, rejected: ms.rejected,
                      admin: isAdmin, admin_ready: adminReady, members: ms.members });
     }
     // v3.9.0: สมุดกองกลางกลาง — ตอบส่วนต่างตั้งแต่ rev ที่เครื่องนั้นเคยรับ (after) + รายการที่มันเพิ่งส่ง
     if (data.kind === 'ledger' && Array.isArray(data.entries)) {
       var ls = _syncLedger(data.install_id, data.entries, Number(data.after) || 0, now, isAdmin);
-      return _json({ ok: true, kind: 'ledger', applied: ls.applied, rejected: ls.rejected,
+      return _json({ ok: true, ver: HUB_SCRIPT_VERSION, kind: 'ledger', applied: ls.applied, rejected: ls.rejected,
                      admin: isAdmin, admin_ready: adminReady, entries: ls.entries, seq: ls.seq, full: ls.full });
     }
 
@@ -505,7 +508,7 @@ function _doPostLocked(e) {
     if (Array.isArray(data.users)) {
       _upsertPresence(data.install_id, data.app_version, data.users, now);
     }
-    return _json({ ok: true, stored: stored, kind: data.kind || 'counts' });
+    return _json({ ok: true, ver: HUB_SCRIPT_VERSION, stored: stored, kind: data.kind || 'counts' });
   } catch (err) {
     return _json({ ok: false, error: String(err).slice(0, 200) });
   }
@@ -587,7 +590,7 @@ function _doGetLocked(e) {
                app_version: String(v[4]), last_seen: String(v[5]) };
     }) : [];
     presence.sort(function (a, b) { return (b.received_at > a.received_at) ? 1 : -1; });
-    return _json({ ok: true, ym: ym, rows: rows, totals: totals, presence: presence });
+    return _json({ ok: true, ver: HUB_SCRIPT_VERSION, ym: ym, rows: rows, totals: totals, presence: presence });
   } catch (err) {
     return _json({ ok: false, error: String(err).slice(0, 200) });
   }
