@@ -56,7 +56,7 @@ class FakeOpen:
         self.steps = list(steps)
         self.calls = []
 
-    def __call__(self, req):
+    def __call__(self, req, timeout=None):   # v3.11.0: _open รับ timeout (ก้อนอัปโหลดไฟล์ใช้เวลานานกว่า)
         self.calls.append((req.get_method(), req.full_url.split("?")[0], req.data))
         step = self.steps.pop(0)
         if isinstance(step, int):

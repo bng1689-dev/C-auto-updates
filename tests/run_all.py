@@ -38,6 +38,7 @@ SUITES = [
     ("test_v390.py", False, "สมุดกองกลางกลาง: 2 เครื่องเห็นรายการชุดเดียวกัน · Super Admin จัดการ · สมาชิกเห็นตัวเอง+ทีม"),
     ("test_v391.py", False, "จัดทีม/บันทึกกองกลางได้เฉพาะเครื่อง Super Admin ที่มีรหัสผู้ดูแล (เครื่องอื่นดูอย่างเดียว)"),
     ("test_v3100.py", False, "สมัครใช้งานเอง → Super Admin อนุมัติ · URL+รหัสลับฝัง · จดจำการเข้าใช้งาน · ดึงไดเรกทอรีก่อน seed"),
+    ("test_v3110.py", False, "ยืนยันผลการค้นตามจำนวนแถว · ส่งไฟล์ผลขึ้น Google Drive ผ่านศูนย์กลาง (Superadmin ตั้งค่า)"),
     ("test_boot.py", False, "การเปิดโปรแกรม (desktop.py) — จอขาว/พอร์ตค้าง"),
     ("test_tools.py", False, "เครื่องมือปล่อยรุ่น: build --allow-new-files/--remove · verify เทียบ manifest ออนไลน์"),
     ("test_installer.py", False, "ตัวสร้างชุดติดตั้งตัวเต็ม (build_installer.py) กับแพ็กเกจจำลอง"),

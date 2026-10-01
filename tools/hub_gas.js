@@ -47,6 +47,15 @@
  *  • เครื่องที่ส่ง after เกินกว่า rev สูงสุดของเล่มนี้ (เปลี่ยนศูนย์กลาง/ชีตถูกสร้างใหม่) ได้ทั้งเล่มกลับไป (full)
  *  • หมายเหตุเป็นข้อความที่ผู้ดูแลพิมพ์เอง — ห้ามพิมพ์เลขบัตร/ชื่อผู้ถูกค้น/ผลคดี
  *
+ * v3.11.0: รับ 'ไฟล์ผลการค้น' ขึ้น Google Drive (เจ้าของโปรเจกต์สั่ง — ผู้ใช้กดส่งเองทีละไฟล์จากหน้าอัปโหลด)
+ *  • ก้อน kind="drive_cfg" อ่าน/ตั้งค่า: เปิด-ปิดการรับไฟล์ + ชื่อโฟลเดอร์ปลายทาง · ค่าเก็บในชีต 'config'
+ *    การตั้งค่าต้องเซ็นด้วย ADMIN_TOKEN (Superadmin เป็นผู้ตั้งเท่านั้น) · ค่าตั้งต้น 'ปิด'
+ *  • ก้อน kind="upload" ส่งตัวไฟล์ (base64) → เก็บลงโฟลเดอร์ในไดรฟ์ของบัญชีที่ Deploy สคริปต์นี้
+ *    และจดบันทึกในชีต 'uploads' (เวลา เครื่อง ผู้ส่ง ชื่อไฟล์ จำนวนแถว ขนาด ลิงก์)
+ *  • ไฟล์นี้มีเลขบัตร+ผลการค้นเต็ม ๆ — โฟลเดอร์/ชีตเป็นของบัญชีคุณคนเดียว อย่าแชร์สาธารณะ
+ *  • HUB_TOKEN เป็นสาธารณะ (ฝังในโปรแกรม) จึงกันการยัดไฟล์ขยะด้วย: เปิดรับเองก่อนเท่านั้น ·
+ *    เพดานขนาดไฟล์ MAX_UPLOAD_MB · เพดานจำนวนไฟล์ต่อวัน MAX_UPLOADS_PER_DAY · อ่านไฟล์กลับไม่ได้ทางสคริปต์
+ *
  * ** หลังวางโค้ดรุ่นนี้ทับ ต้องอัปเดตการ Deploy ให้ใช้โค้ดใหม่ ด้วยวิธีนี้เท่านั้น: **
  *    Deploy → Manage deployments → (อันที่ใช้อยู่) ไอคอนดินสอ ✏ → Version: New version → Deploy
  *    ห้ามใช้ "New deployment" เพราะจะได้ URL /exec อันใหม่ เครื่องลูกทุกเครื่องจะยังคุยกับ
@@ -76,7 +85,7 @@
  */
 
 // v3.9.2: รุ่นของสคริปต์นี้ — ส่งกลับในทุกคำตอบ (ver) ให้โปรแกรมโชว์ว่า Deploy รุ่นไหนอยู่จริง (รุ่นเก่าไม่ส่ง = 'รุ่นเก่า')
-var HUB_SCRIPT_VERSION = '3.10.2';
+var HUB_SCRIPT_VERSION = '3.11.0';
 
 var HUB_TOKEN = 'เปลี่ยนรหัสนี้ก่อนใช้งานจริง';
 // v3.7.0: รหัสผู้ดูแลศูนย์กลาง — เซ็นก้อน members ที่ "แก้ไดเรกทอรี" (ดูกติกาด้านบน) · ต้องต่างจาก HUB_TOKEN
@@ -95,6 +104,15 @@ var MAX_PENDING = 200;   // จำกัดคำขอค้าง — URL เ�
 var LEDGER_SHEET = 'ledger';
 var LEDGER_COLS = ['gid', 'ts', 'ym', 'owner', 'kind', 'amount', 'note', 'created_by', 'deleted', 'rev',
                    'origin', 'updated_by', 'received_at'];
+// v3.11.0: รับไฟล์ผลการค้นขึ้น Google Drive — ค่าตั้งต้น 'ปิด' จนกว่า Super Admin จะเปิดเอง (ชีต config)
+var CONFIG_SHEET = 'config';     // ค่ากลาง k,v — drive_enabled ('1'/'') · drive_folder (ชื่อโฟลเดอร์) · drive_folder_id
+var UPLOADS_SHEET = 'uploads';   // บันทึกไฟล์ที่รับไว้ — ไม่มีทางอ่านตัวไฟล์กลับผ่านสคริปต์ (ดูได้เฉพาะในไดรฟ์ของคุณ)
+var UPLOAD_COLS = ['received_at', 'install_id', 'user', 'name', 'ym', 'rows_total', 'found', 'notfound',
+                   'errors', 'size', 'sha256', 'file_id', 'file_url'];
+var DRIVE_FOLDER_DEFAULT = 'CRIMES AUTO ไฟล์ผลการค้น';
+var MAX_UPLOAD_MB = 20;          // เพดานขนาดไฟล์ต่อครั้ง (ฝั่งโปรแกรมกันไว้ชั้นหนึ่งแล้ว)
+var MAX_UPLOADS_PER_DAY = 40;    // เพดานจำนวนไฟล์ต่อวัน — HUB_TOKEN เป็นสาธารณะ กันคนนอกยัดไฟล์จนไดรฟ์บวม
+var MAX_UPLOAD_ROWS = 2000;      // ชีต uploads เก็บรายการท้ายสุดเท่านี้แถว
 
 /** ข้อความเวลาแบบ ISO — Sheet อาจแปลงข้อความวันที่เป็น Date ให้เอง ต้องคืนกลับเป็นข้อความรูปเดิมก่อนเทียบ */
 function _isoText(v) {
@@ -455,6 +473,141 @@ function _sheet() {
   return sh;
 }
 
+// ──────────────── v3.11.0: รับไฟล์ผลการค้นขึ้น Google Drive ────────────────
+function _configSheet() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var sh = ss.getSheetByName(CONFIG_SHEET);
+  if (!sh) {
+    sh = ss.insertSheet(CONFIG_SHEET);
+    sh.appendRow(['k', 'v']);
+    sh.setFrozenRows(1);
+  }
+  return sh;
+}
+
+function _cfgRead() {
+  var sh = _configSheet();
+  var last = sh.getLastRow();
+  var map = {};
+  if (last >= 2) {
+    sh.getRange(2, 1, last - 1, 2).getValues().forEach(function (v) {
+      var k = String(v[0] == null ? '' : v[0]).trim();
+      if (k) map[k] = String(v[1] == null ? '' : v[1]);
+    });
+  }
+  return map;
+}
+
+function _cfgWrite(map) {
+  var sh = _configSheet();
+  var keys = Object.keys(map).sort();
+  var out = keys.map(function (k) { return [k, String(map[k] == null ? '' : map[k])]; });
+  var prevLast = sh.getLastRow();
+  if (out.length) sh.getRange(2, 1, out.length, 2).setValues(out);
+  if (prevLast > out.length + 1) sh.getRange(out.length + 2, 1, prevLast - out.length - 1, 2).clearContent();
+}
+
+/** โฟลเดอร์ปลายทางในไดรฟ์ — ใช้รหัสที่จดไว้ก่อน ถูกลบ/หาย = หาจากชื่อ ไม่มีจริง ๆ จึงสร้างใหม่ (จดรหัสลง cfg ให้) */
+function _driveFolder(cfg) {
+  var name = String(cfg.drive_folder || '').trim() || DRIVE_FOLDER_DEFAULT;
+  var id = String(cfg.drive_folder_id || '');
+  if (id) {
+    try {
+      var f = DriveApp.getFolderById(id);
+      if (f && !f.isTrashed()) return f;
+    } catch (e) { /* โฟลเดอร์ถูกลบ/เข้าไม่ได้ → หา/สร้างตามชื่อ */ }
+  }
+  var it = DriveApp.getFoldersByName(name);
+  var f2 = (it.hasNext() ? it.next() : DriveApp.createFolder(name));
+  cfg.drive_folder = name;
+  cfg.drive_folder_id = f2.getId();
+  return f2;
+}
+
+/** สถานะที่ตอบกลับเครื่องลูก — ลิงก์โฟลเดอร์ให้เฉพาะก้อนที่เซ็นผู้ดูแล (เครื่องสมาชิกไม่จำเป็นต้องรู้) */
+function _driveState(cfg, isAdmin) {
+  var st = { enabled: cfg.drive_enabled ? 1 : 0,
+             folder: String(cfg.drive_folder || '').trim() || DRIVE_FOLDER_DEFAULT };
+  if (isAdmin && cfg.drive_folder_id) {
+    try { st.folder_url = DriveApp.getFolderById(String(cfg.drive_folder_id)).getUrl(); }
+    catch (e) { st.folder_url = ''; }
+  }
+  return st;
+}
+
+/** ตั้งค่าโดยก้อนที่เซ็นผู้ดูแลแล้วเท่านั้น (doPost ตรวจก่อนเรียก) — เปลี่ยนชื่อโฟลเดอร์ = เริ่มชี้โฟลเดอร์ใหม่ */
+function _driveCfgSet(set) {
+  var cfg = _cfgRead();
+  if ('folder' in set) {
+    var nm = String(set.folder == null ? '' : set.folder).trim().slice(0, 100);
+    if (nm && nm !== String(cfg.drive_folder || '')) {
+      cfg.drive_folder = nm;
+      cfg.drive_folder_id = '';
+    }
+  }
+  cfg.drive_enabled = set.enabled ? '1' : '';
+  if (cfg.drive_enabled) _driveFolder(cfg);      // เปิดใช้ = เตรียมโฟลเดอร์ทันที ผู้ดูแลได้ลิงก์กลับไปเลย
+  _cfgWrite(cfg);
+  return cfg;
+}
+
+function _uploadsSheet() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var sh = ss.getSheetByName(UPLOADS_SHEET);
+  if (!sh) {
+    sh = ss.insertSheet(UPLOADS_SHEET);
+    sh.appendRow(UPLOAD_COLS);
+    sh.setFrozenRows(1);
+  }
+  return sh;
+}
+
+/** รับไฟล์หนึ่งไฟล์ — ตรวจว่าเปิดรับอยู่ · ขนาดไม่เกินเพดาน · วันนี้ยังไม่ครบโควตา แล้วจึงเก็บลงไดรฟ์+จดบันทึก */
+function _handleUpload(data, now) {
+  var cfg = _cfgRead();
+  if (!cfg.drive_enabled) {
+    return { ok: false, error: 'ศูนย์กลางยังไม่เปิดรับไฟล์ขึ้น Google Drive — ให้ Super Admin เปิดที่ Setting → ศูนย์กลาง → Google Drive' };
+  }
+  var b64 = String(data.content_b64 || '');
+  if (!b64) return { ok: false, error: 'ไม่มีเนื้อไฟล์' };
+  if (b64.length > Math.ceil(MAX_UPLOAD_MB * 1024 * 1024 * 4 / 3) + 16) {
+    return { ok: false, error: 'ไฟล์ใหญ่เกิน ' + MAX_UPLOAD_MB + ' MB — ศูนย์กลางไม่รับ' };
+  }
+  var sh = _uploadsSheet();
+  var last = sh.getLastRow();
+  var today = _isoText(now).slice(0, 10);
+  var todayCount = 0;
+  if (last >= 2) {
+    sh.getRange(2, 1, last - 1, 1).getValues().forEach(function (v) {
+      if (_isoText(v[0]).slice(0, 10) === today) todayCount++;
+    });
+  }
+  if (todayCount >= MAX_UPLOADS_PER_DAY) {
+    return { ok: false, error: 'วันนี้ศูนย์กลางรับไฟล์ครบ ' + MAX_UPLOADS_PER_DAY + ' ไฟล์แล้ว — ส่งใหม่พรุ่งนี้' };
+  }
+  var bytes;
+  try { bytes = Utilities.base64Decode(b64); } catch (e) { return { ok: false, error: 'เนื้อไฟล์ไม่ใช่ base64' }; }
+  if (!bytes || !bytes.length) return { ok: false, error: 'ไฟล์ว่าง' };
+  var name = String(data.name == null ? '' : data.name)
+    .replace(/[\\/\u0000-\u001f\u007f]/g, '_').trim().slice(0, 150) || 'result.xlsx';
+  var folder = _driveFolder(cfg);
+  _cfgWrite(cfg);                                // _driveFolder อาจเพิ่งสร้างโฟลเดอร์/จดรหัสใหม่
+  var blob = Utilities.newBlob(bytes, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', name);
+  var file = folder.createFile(blob);
+  sh.appendRow([now, _safeStr(String(data.install_id == null ? '' : data.install_id).slice(0, 64)),
+                _safeStr(String(data.user == null ? '' : data.user).slice(0, 80)), _safeStr(name),
+                "'" + _ymText(data.ym), Number(data.rows_total) || 0, Number(data.found) || 0,
+                Number(data.notfound) || 0, Number(data.errors) || 0, bytes.length,
+                _safeStr(String(data.sha256 == null ? '' : data.sha256).slice(0, 64)), file.getId(), file.getUrl()]);
+  var lastNow = sh.getLastRow();
+  if (lastNow - 1 > MAX_UPLOAD_ROWS) {
+    var keep = sh.getRange(lastNow - MAX_UPLOAD_ROWS + 1, 1, MAX_UPLOAD_ROWS, UPLOAD_COLS.length).getValues();
+    sh.getRange(2, 1, lastNow - 1, UPLOAD_COLS.length).clearContent();
+    sh.getRange(2, 1, keep.length, UPLOAD_COLS.length).setValues(keep);
+  }
+  return { ok: true, url: file.getUrl(), name: name, size: bytes.length };
+}
+
 function _signWith(text, key) {
   // v3.10.2: คำนวณจาก byte UTF-8 ตรง ๆ — ตัวแปรแบบสตริงของ computeHmacSha256Signature เพี้ยนกับอักขระนอก ASCII
   // (โปรแกรมรุ่น 3.10.2 ส่งก้อนแบบ ASCII ล้วนอยู่แล้ว จึงเข้ากันได้ทั้งสคริปต์เก่า/ใหม่ — บรรทัดนี้กันเผื่อไคลเอนต์รุ่นเก่า)
@@ -526,6 +679,24 @@ function _doPostLocked(e) {
       var ls = _syncLedger(data.install_id, data.entries, Number(data.after) || 0, now, isAdmin);
       return _json({ ok: true, ver: HUB_SCRIPT_VERSION, kind: 'ledger', applied: ls.applied, rejected: ls.rejected,
                      admin: isAdmin, admin_ready: adminReady, entries: ls.entries, seq: ls.seq, full: ls.full });
+    }
+    // v3.11.0: อ่าน/ตั้งค่าการรับไฟล์ขึ้น Google Drive — การตั้งค่าต้องเซ็นด้วย ADMIN_TOKEN เท่านั้น
+    if (data.kind === 'drive_cfg') {
+      if (data.set && typeof data.set === 'object') {
+        if (!isAdmin) {
+          return _json({ ok: false, error: 'การตั้งค่า Google Drive ต้องมาจากเครื่อง Super Admin ที่มีรหัสผู้ดูแลศูนย์กลาง' });
+        }
+        _driveCfgSet(data.set);
+      }
+      return _json({ ok: true, ver: HUB_SCRIPT_VERSION, kind: 'drive_cfg', admin: isAdmin,
+                     admin_ready: adminReady, drive: _driveState(_cfgRead(), isAdmin) });
+    }
+    // v3.11.0: รับไฟล์ผลการค้น (ผู้ใช้กดส่งเองจากหน้าอัปโหลด) — เก็บลงไดรฟ์แล้วตอบลิงก์กลับ
+    if (data.kind === 'upload') {
+      var up = _handleUpload(data, now);
+      up.ver = HUB_SCRIPT_VERSION;
+      up.kind = 'upload';
+      return _json(up);
     }
 
     // ตัวเลขรายเดือน: เฉพาะเมื่อก้อนนี้มี rows เป็นอาร์เรย์จริง ๆ
