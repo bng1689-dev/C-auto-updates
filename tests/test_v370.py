@@ -50,7 +50,7 @@ def check(name, cond, detail=""):
 
 def raw_post(payload, tok=TOKEN, admin_token=None, script_admin=ADMIN):
     """ยิงก้อนที่เซ็นแล้วเข้า hub_gas.js ตัวจริงบน Node (Sheet = ไฟล์ JSON ร่วมกับเครื่อง B)"""
-    body = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+    body = hub.encode_payload(payload).decode("ascii")   # ก้อนจริงเป็น ASCII ล้วน (v3.10.2 — ดู hub.encode_payload)
     param = {"sign": hub.sign(body.encode("utf-8"), tok)}
     if admin_token:
         param["asign"] = hub.sign(body.encode("utf-8"), admin_token)
