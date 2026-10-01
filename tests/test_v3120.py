@@ -173,7 +173,8 @@ def main():
               and page.locator("#inputPid").count() == 1, str(ec3))
 
         # รีโหลดหน้า (จำโหมดแล้ว) → เหลือหน้าเลือกหมวด — ทางกู้ของ search_one_id ต้องผ่านเอง
-        page.goto(url, wait_until="domcontentloaded")
+        # (goto ไป URL เดิมเป๊ะของ SPA ไม่นับเป็นโหลดใหม่ — ต้อง reload จริง สถานะในหน้า (S.person) จึงหาย)
+        page.reload(wait_until="domcontentloaded")
         page.wait_for_timeout(700)
         check("รีโหลด: ข้ามกล่องถามโหมด (จำไว้แล้ว) เหลือหน้าเลือกหมวด",
               page.locator("#classicChk").count() == 0 and page.locator("#inputPid").count() == 0
