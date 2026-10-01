@@ -106,6 +106,19 @@ def main():
     r = c.post("/api/clear/all", json={"code": "newsecret7"})
     check("รหัสใหม่ใช้ได้ทันที — ล้างทั้งหมดผ่าน", r.status_code == 200 and r.get_json().get("ok"),
           str(r.get_json()))
+    # เซสชันที่ปลดล็อกด้วย PASSCODE: ต้องกรอกรหัสผ่านแค่ครั้งเดียวในช่องยืนยัน (รีวิว PR #40 —
+    # เดิมติด fresh_auth ซ้อน ทำให้เด้งขอรหัสผ่านอีกรอบทั้งที่เพิ่งพิมพ์ไปแล้ว)
+    with c.session_transaction() as s:
+        s["auth_method"] = "passcode"
+    r = c.post("/api/clear/all", json={"code": "newsecret7"})
+    check("เซสชัน PASSCODE: ล้างทั้งหมดด้วยรหัสผ่านครั้งเดียว ไม่เด้ง need_password ซ้ำ",
+          r.status_code == 200 and r.get_json().get("ok"), str(r.get_json()))
+    r = c.post("/api/clear/all", json={"code": "ผิดแน่นอน"})
+    check("เซสชัน PASSCODE: รหัสผิดยังถูกปัดตามปกติ (403)", r.status_code == 403, str(r.get_json()))
+    with db.get_conn() as conn:
+        conn.execute("DELETE FROM auth_throttle")
+    with c.session_transaction() as s:
+        s["auth_method"] = "password"
 
     print("\n── สมาชิกธรรมดา: ล้างของตัวเองไม่ต้องใส่รหัส (ขอบเขตแคบ) ──")
     cw = server.app.test_client()
