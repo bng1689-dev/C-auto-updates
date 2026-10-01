@@ -249,6 +249,33 @@ def main():
           len(up_rows) == 2 and up_rows[1][2] == "แอดมิน" and up_rows[1][5] == 4
           and up_rows[1][9] == Path(path1).stat().st_size and up_rows[1][10] == local_sha, str(up_rows[1:]))
 
+    print("\n── อัปโหลดทับชื่อเดิม / ไฟล์เปลี่ยนหลังยืนยัน = การยืนยันเดิมใช้ไม่ได้ (รีวิว PR #39) ──")
+    st3, up3 = upload(c, make_xlsx("งานทับ.xlsx", 2, seed=3))
+    p3 = up3["job"]["path"]
+    fill(p3, [FOUND1, " - "])
+    c.post("/api/queue/prune")                       # สรุปถูกเก็บ · งานหายจากคิว
+    r3 = fr_by_file(c, "งานทับ.xlsx")
+    r = c.post(f"/api/files/results/{r3['id']}/confirm", json={})
+    check("(เตรียม) ไฟล์แรกยืนยันแล้ว (นอกคิว — สแกนด้วยพารามิเตอร์ที่จดไว้)", r.status_code == 200, str(r.get_json()))
+    st3b, up3b = upload(c, make_xlsx("งานทับ.xlsx", 3, seed=4))   # ไฟล์ใหม่ชื่อเดิม ยังไม่ได้ค้น
+    row3 = fr_by_file(c, "งานทับ.xlsx")
+    check("อัปโหลดทับชื่อเดิม → สรุปเดิมถูกล้างการยืนยันทันที (แถวเดิม id เดิม · นับของไฟล์ใหม่)",
+          st3b == 200 and row3 and row3["id"] == r3["id"] and not row3["confirmed"]
+          and row3["rows_total"] == 3 and row3["pending"] == 3, str(row3))
+    r = c.post(f"/api/files/results/{r3['id']}/drive", json={})
+    check("ส่งไดรฟ์หลังถูกทับ → 400 (ไฟล์ใหม่ต้องค้น+ยืนยันก่อน)", r.status_code == 400, str(r.get_json()))
+    fill(p3, [FOUND1, " - ", " - "])
+    r = c.post(f"/api/files/results/{r3['id']}/confirm", json={})
+    check("ไฟล์ใหม่ค้นครบ → ยืนยันรอบใหม่ได้", r.status_code == 200, str(r.get_json()))
+    c.post("/api/queue/prune")
+    fill(p3, [None, "ERROR: ถูกแก้หลังยืนยัน", None])             # แก้ไฟล์บนดิสก์หลังยืนยัน นอกคิวแล้ว
+    r = c.post(f"/api/files/results/{r3['id']}/drive", json={})
+    check("ไฟล์เปลี่ยนหลังยืนยัน (นอกคิว) → ปุ่มส่งสแกนสดจับได้ ไม่ส่ง (400 บอกให้ยืนยันใหม่)",
+          r.status_code == 400 and "เปลี่ยน" in r.get_json()["error"], str(r.get_json()))
+    row3 = fr_by_file(c, "งานทับ.xlsx")
+    check("ยอดถูกสรุปใหม่ + การยืนยันถูกล้าง (ผิดพลาด 1)", row3 and not row3["confirmed"] and row3["errors"] == 1,
+          str(row3))
+
     print("\n── ขอบเขตสิทธิ์ในเครื่อง: สมาชิกเห็น/จัดการเฉพาะของตัวเอง ──")
     cw = server.app.test_client()
     r = cw.post("/api/login", json={"username": "worker1", "password": "pass66"})
@@ -295,6 +322,11 @@ def main():
     df = drive_files()
     bfile = next(x for x in df if x["name"].startswith("งานทดสอบ ๑"))
     check("ไฟล์ชื่อไทยของ B ถึงไดรฟ์ · ชื่อคงเดิม (เติมจำนวนชื่อ)", bfile["name"] == "งานทดสอบ ๑(3ชื่อ).xlsx", str(df))
+    out = machine_b([{"op": "login", "u": "worker1", "p": "pass66"},
+                     {"op": "get", "path": "/api/hub/drive", "as": "dv"}])
+    check("เครื่องสมาชิก (แคชว่าง) ถามสถานะไดรฟ์ → ได้ 'เปิดรับ' สดจากศูนย์กลาง · ไม่เห็นลิงก์โฟลเดอร์ (รีวิว PR #39)",
+          out["dv"][0] == 200 and out["dv"][1]["drive"].get("enabled")
+          and "folder_url" not in out["dv"][1]["drive"], str(out["dv"]))
     out = machine_b([{"op": "set_admin_token", "token": ""},
                      {"op": "login", "u": "worker1", "p": "pass66"},
                      {"op": "drive_direct", "set": {"enabled": False}, "as": "ds"}])
@@ -350,6 +382,8 @@ def main():
     check("worker เก็บสรุปผลเมื่อค้นจบไฟล์", "upsert_file_result" in worker_src)
     check("หน้าเว็บมีการ์ดยืนยันผล + ตั้งค่าไดรฟ์ (Superadmin)", "fileResultsCard" in html_src
           and "btnHubDriveSave" in html_src and "fr-confirm" in html_src and "loadDriveCfg" in html_src)
+    check("หน้าอัปโหลดถามสถานะไดรฟ์กับศูนย์กลางเอง (เครื่องสมาชิกเห็นปุ่มส่งเมื่อเปิดรับ)",
+          "refreshDriveForCard" in html_src)
 
     print(f"\n==== ผล: ผ่าน {PASS} · ตก {FAIL} ====")
     return 1 if FAIL else 0
