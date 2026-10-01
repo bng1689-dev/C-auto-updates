@@ -42,6 +42,7 @@ SUITES = [
     ("test_boot.py", False, "การเปิดโปรแกรม (desktop.py) — จอขาว/พอร์ตค้าง"),
     ("test_tools.py", False, "เครื่องมือปล่อยรุ่น: build --allow-new-files/--remove · verify เทียบ manifest ออนไลน์"),
     ("test_installer.py", False, "ตัวสร้างชุดติดตั้งตัวเต็ม (build_installer.py) กับแพ็กเกจจำลอง"),
+    ("test_v3120.py", True, "โหมดหน้าจอเดิม+เลือก 'บุคคล' หลัง login CRIMES · รหัสลบข้อมูล=รหัสผ่านสมาชิก · ซิงก์ทันทีที่เปิด"),
     ("test_announce.py", True, "ปิดกล่อง 'มีอะไรใหม่' ของเว็บ CRIMES"),
     ("test_runbar.py", True, "แถบสถานะ/ปุ่มควบคุมรอบค้น + เข้าสู่ระบบใหม่"),
     ("test_ui_smoke.py", True, "ไล่ครบทุกเมนูบน Chromium จริง ต้องไม่มี JS error"),

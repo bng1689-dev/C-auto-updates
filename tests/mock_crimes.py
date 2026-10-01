@@ -2,6 +2,9 @@
 
 จำลองพฤติกรรมที่ engine ต้องรับมือจริง:
   • หน้าเข้าสู่ระบบ (มีช่องรหัสผ่าน) → เข้าสู่ระบบแล้วค่อยเด้งไปหน้าค้นหา
+  • (v3.12.0) หลังเข้าสู่ระบบ เว็บถามรูปแบบหน้าจอ: ติ๊ก 'ใช้โหมดหน้าจอเดิม' + กด 'ยืนยัน'
+    แล้วต้องเลือกหมวด 'บุคคล' (มี 'นิติบุคคล' เป็นตัวหลอก) ก่อนถึงหน้าค้น — การเลือกโหมดจำใน
+    localStorage (ถามครั้งเดียว) แต่หมวดต้องเลือกใหม่ทุกครั้งที่โหลดหน้า (จำลองเว็บจริง + ทางกู้หลังรีโหลด)
   • กล่อง 'มีอะไรใหม่' ครอบทั้งหน้า (หัวข้อบนสุด ปุ่ม 'เข้าใจแล้ว' ล่างสุด คนละกิ่ง)
   • หน้าค้นหาเป็น SPA URL เดิม — ผลของคนก่อนหน้าค้างบนหน้าจนกว่าคำตอบใหม่จะมา (หน่วงได้)
   • ป๊อบอัพระบุเหตุผล + ปุ่ม 'ยืนยันค้นหา' · ตาราง → หน้ารายละเอียด → 'ย้อนกลับ'
@@ -16,6 +19,7 @@ from urllib.parse import urlparse, parse_qs
 STATE = {
     "logged_in": False,
     "announce": True,
+    "classic_prompt": True,    # v3.12.0: ถามรูปแบบหน้าจอหลังเข้าสู่ระบบ + ต้องเลือกหมวด 'บุคคล'
     "delay": 0.0,              # หน่วงคำตอบการค้น (วินาที)
     "fail_http": {},           # pid -> จำนวนครั้งแรกที่ตอบ 500
     "stuck": [],               # pid ที่ป๊อบอัพยืนยันค้างครั้งแรก
@@ -38,13 +42,38 @@ table{border-collapse:collapse} td,th{border:1px solid #999;padding:4px}
 <div class="bar">ระบบสืบค้น (จำลอง) · <span id="who"></span></div>
 <div id="app"></div>
 <script>
-const S = {results:null, count:null, pid:"", cfg:{stuck:[]}, stuckUsed:{}, detail:null};
+const S = {results:null, count:null, pid:"", cfg:{stuck:[]}, stuckUsed:{}, detail:null, person:false};
 async function cfg(){ try{ S.cfg = await (await fetch('/api/config')).json(); }catch(e){} }
 function esc(s){return (s??'').toString().replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
 async function session(){ try{ return (await (await fetch('/api/session')).json()).logged_in; }catch(e){ return false; } }
 function renderLogin(){
   document.getElementById('who').textContent='';
   app.innerHTML = '<h3>เข้าสู่ระบบ</h3><input placeholder="ชื่อผู้ใช้"> <input type="password" placeholder="รหัสผ่าน"> <button>เข้าสู่ระบบ</button>';
+}
+function renderClassicPrompt(){
+  // v3.12.0: กล่องเลือกรูปแบบหลังเข้าสู่ระบบ — ต้อง 'ติ๊กก่อน' ปุ่มยืนยันจึงทำงาน (เหมือนเว็บจริง)
+  document.getElementById('who').textContent='ชื่อ : ร.ต.อ.ทดสอบ ระบบ';
+  app.innerHTML = '<div class="overlay"><div class="box"><div class="head"><b>เลือกรูปแบบการแสดงผล</b></div>'
+    + '<div class="body">ระบบมีหน้าจอรูปแบบใหม่ให้ทดลองใช้<br>'
+    + '<label><input type="checkbox" id="classicChk"> <span>ใช้โหมดหน้าจอเดิม</span></label></div>'
+    + '<div class="foot"><button id="classicCancel">ยกเลิก</button> <button id="classicOk">ยืนยัน</button></div></div></div>';
+  document.getElementById('classicOk').onclick = ()=>{
+    if(!document.getElementById('classicChk').checked) return;   // ไม่ติ๊ก = ปุ่มไม่ทำงาน
+    localStorage.setItem('classicMode','1'); route();
+  };
+  document.getElementById('classicCancel').onclick = ()=>{};      // โหมดใหม่ไม่จำลอง — ต้องติ๊ก+ยืนยันเท่านั้น
+}
+function renderCategory(){
+  // v3.12.0: โหมดหน้าจอเดิมให้เลือกหมวดก่อน — 'นิติบุคคล' อยู่ก่อน 'บุคคล' (กันโปรแกรมคลิกคำที่แค่ 'มีคำว่าบุคคล')
+  document.getElementById('who').textContent='ชื่อ : ร.ต.อ.ทดสอบ ระบบ';
+  app.innerHTML = '<h3>เลือกประเภทการค้นหา</h3>'
+    + '<div class="cat"><button data-cat="juristic">นิติบุคคล</button> '
+    + '<button data-cat="vehicle">ยานพาหนะ</button> '
+    + '<button data-cat="person">บุคคล</button> '
+    + '<button data-cat="case">คดี</button></div>';
+  app.querySelectorAll('button[data-cat]').forEach(b=>b.onclick=()=>{
+    if(b.dataset.cat==='person'){ S.person = true; route(); }
+  });
 }
 function renderCriteria(){
   document.getElementById('who').textContent='ชื่อ : ร.ต.อ.ทดสอบ ระบบ';
@@ -111,7 +140,11 @@ async function route(){
     return;
   }
   if(!(await session())){ location.hash = '#/login'; return; }
-  if(h.includes('detail')) renderDetail(); else renderCriteria();
+  if(h.includes('detail')){ renderDetail(); return; }
+  // v3.12.0: โหมด/หมวดคั่นก่อนหน้าค้น — โหมดจำใน localStorage · หมวดเลือกใหม่ทุกครั้งที่โหลดหน้า
+  if(S.cfg.classic_prompt && !localStorage.getItem('classicMode')){ renderClassicPrompt(); return; }
+  if(S.cfg.classic_prompt && !S.person){ renderCategory(); return; }
+  renderCriteria();
 }
 window.addEventListener('hashchange', route);
 cfg().then(route);
@@ -144,7 +177,8 @@ class H(BaseHTTPRequestHandler):
         if u.path == "/api/session":
             return self._json({"logged_in": STATE["logged_in"]})
         if u.path == "/api/config":
-            return self._json({"announce": STATE["announce"], "stuck": STATE["stuck"]})
+            return self._json({"announce": STATE["announce"], "stuck": STATE["stuck"],
+                               "classic_prompt": STATE["classic_prompt"]})
         if u.path == "/api/search":
             pid = (q.get("pid") or [""])[0]
             with LOCK:
