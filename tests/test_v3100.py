@@ -307,10 +307,19 @@ def main():
                "import config, auth; cfg = auth.load_config();"
                "print(int(bool(config.DEFAULT_HUB_TOKEN) and len(config.DEFAULT_HUB_TOKEN) >= 16),"
                " int(cfg['hub_token'] == config.DEFAULT_HUB_TOKEN and cfg['hub_enabled'] is True"
-               " and cfg['hub_url'] == config.DEFAULT_HUB_URL and int(cfg['hub_interval_min']) == 1))")
+               " and cfg['hub_url'] == config.DEFAULT_HUB_URL and int(cfg['hub_interval_min']) == 1));"
+               # v3.10.1: เครื่องที่ยังชี้ URL เก่าขององค์กร → ย้ายไปตัวใหม่ให้เอง (รหัสลับคงเดิม)
+               "auth.update_config(hub_url=config.OLD_HUB_URLS[0]);"
+               "print(int(auth.load_config()['hub_url'] == config.DEFAULT_HUB_URL));"
+               "auth.update_config(hub_url=config.OLD_HUB_URLS[-1]);"
+               "print(int(auth.load_config()['hub_url'] == config.DEFAULT_HUB_URL));"
+               # ศูนย์กลางอื่นที่ตั้งเอง — ห้ามแตะทั้ง URL และห้ามยัดรหัสฝังให้
+               "auth.update_config(hub_url='https://script.google.com/macros/s/CUSTOM/exec', hub_token='my-own-token-123456');"
+               "c2 = auth.load_config();"
+               "print(int(c2['hub_url'].endswith('/CUSTOM/exec') and c2['hub_token'] == 'my-own-token-123456'))")
     r2 = subprocess.run([sys.executable, "-c", code_py], env=env2, capture_output=True, text=True, timeout=60)
-    check("เครื่องจริง (ไม่มี env ทดสอบ): config ใหม่ได้รหัสลับฝัง + เปิดซิงก์เองทุก 1 นาที",
-          r2.stdout.split() == ["1", "1"], (r2.stdout + r2.stderr)[-300:])
+    check("เครื่องจริง (ไม่มี env ทดสอบ): รหัสลับฝัง+ซิงก์ 1 นาที · URL เก่าทั้งสองถูกย้ายไปตัวใหม่ · URL ที่ตั้งเองไม่ถูกแตะ",
+          r2.stdout.split() == ["1", "1", "1", "1", "1"], (r2.stdout + r2.stderr)[-300:])
     src_desk = (APP / "desktop.py").read_text(encoding="utf-8")
     check("จดจำการเข้าใช้งาน: หน้าต่างแอปไม่เปิดแบบ private (private_mode=False — คุกกี้ 30 วันอยู่ข้ามการปิดโปรแกรม)",
           "private_mode=False" in src_desk and "storage_path" in src_desk)
