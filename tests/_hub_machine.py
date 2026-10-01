@@ -22,7 +22,7 @@ from _app import APP  # noqa: E402,F401
 import hub  # noqa: E402
 
 
-def fake_post(url, payload, tok, admin_token=None):
+def fake_post(url, payload, tok, admin_token=None, timeout=None):
     body = hub.encode_payload(payload).decode("ascii")   # ก้อนจริงเป็น ASCII ล้วน (v3.10.2 — ดู hub.encode_payload)
     param = {"sign": hub.sign(body.encode("utf-8"), tok)}
     if admin_token:
@@ -148,6 +148,53 @@ for cmd in json.loads(sys.stdin.read() or "[]"):
     elif op == "login_full":                     # เหมือน login แต่คืน JSON เต็ม (ดูข้อความ 'รออนุมัติ')
         r = c.post("/api/login", json={"username": cmd["u"], "password": cmd["p"]})
         out[key] = [r.status_code, r.get_json()]
+    # ---- v3.11.0: ยืนยันผลรายไฟล์ + ส่งขึ้น Google Drive ----
+    elif op == "make_file":                      # สร้างไฟล์งาน .xlsx (เลขบัตรถูกต้อง n แถว) — คืน path
+        import openpyxl
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.cell(row=1, column=1, value="ลำดับ")
+        ws.cell(row=1, column=2, value="เลขบัตรประชาชน")
+        results = cmd.get("results") or []
+        for i in range(int(cmd["n"])):
+            ws.cell(row=2 + i, column=1, value=i + 1)
+            base = [int(d) for d in f"3{int(cmd.get('seed', 0)) % 10}{i:010d}"]   # 12 หลักแรก (ไม่ซ้ำรายแถว)
+            check = (11 - sum(d * (13 - j) for j, d in enumerate(base)) % 11) % 10
+            ws.cell(row=2 + i, column=2, value="".join(map(str, base)) + str(check))
+            if i < len(results) and results[i]:
+                ws.cell(row=2 + i, column=6, value=results[i])
+        src = Path(data_dir) / "src"
+        src.mkdir(parents=True, exist_ok=True)
+        fp = src / cmd["name"]
+        wb.save(fp)
+        out[key] = str(fp)
+    elif op == "upload_api":                     # อัปโหลดเข้าโปรแกรมจริง (multipart) — เข้าคิวเหมือนผู้ใช้ลากไฟล์
+        p = Path(cmd["path"])
+        with open(p, "rb") as fh:
+            r = c.post("/api/upload", data={"file": (fh, p.name)}, content_type="multipart/form-data")
+        out[key] = [r.status_code, r.get_json()]
+    elif op == "fill_results":                   # จำลองผลที่ worker เขียนลงคอลัมน์ F (ไฟล์ในคิว)
+        import openpyxl
+        fp = Path(cmd["path"])
+        wb = openpyxl.load_workbook(fp)
+        ws = wb.active
+        for i, v in enumerate(cmd["values"]):
+            if v:
+                ws.cell(row=2 + i, column=6, value=v)
+        wb.save(fp)
+        out[key] = True
+    elif op == "http_delete":                    # DELETE ตาม path (op 'delete' เดิมจองไว้ให้ลบสมาชิก)
+        r = c.delete(cmd["path"])
+        out[key] = [r.status_code, r.get_json()]
+    elif op == "drive_direct":                   # เรียก hub.drive_config/upload_file ตรง ๆ (ทดสอบชั้น hub)
+        cfg = server.auth.load_config()
+        if cmd.get("set") is not None:
+            res = hub.drive_config(cfg.get("hub_url"), cfg.get("hub_token"),
+                                   admin_token=cfg.get("hub_admin_token") or None, set_cfg=cmd["set"])
+        else:
+            res = hub.drive_config(cfg.get("hub_url"), cfg.get("hub_token"),
+                                   admin_token=cfg.get("hub_admin_token") or None)
+        out[key] = res
     elif op in ("get", "post", "put", "delete"):  # เรียก API ใดก็ได้ (ใช้เตรียมสถานการณ์)
         r = getattr(c, op)(cmd["path"], json=cmd.get("json")) if op != "get" else c.get(cmd["path"])
         out[key] = [r.status_code, r.get_json()]

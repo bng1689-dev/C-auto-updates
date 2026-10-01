@@ -67,7 +67,10 @@ class Range {
 }
 class Sheet {
   constructor(name, data) { this.name = name; this.rows = data.rows || []; this.frozen = data.frozen || 0; }
-  appendRow(vals) { this.rows.push(vals.slice()); }
+  appendRow(vals) {
+    // Google Sheets: ' นำหน้า = บังคับข้อความ และไม่เก็บตัว ' ไว้ (เหมือน setValues ข้างบน)
+    this.rows.push(vals.map(v => (typeof v === 'string' && v.startsWith("'")) ? v.slice(1) : v));
+  }
   setFrozenRows(n) { this.frozen = n; }
   getLastRow() { return this.rows.length; }
   getLastColumn() { return this.rows.reduce((m, r) => Math.max(m, r.length), 0); }
@@ -80,8 +83,45 @@ const ss = {
   getSheetByName: n => sheets[n] || null,
   insertSheet: n => { sheets[n] = new Sheet(n, {}); return sheets[n]; },
 };
+
+// v3.11.0: Drive จำลอง — โฟลเดอร์/ไฟล์เก็บใน state (ไฟล์เก็บเฉพาะ ชื่อ·ขนาด·sha256 พอให้เทสต์ตรวจ ไม่เก็บเนื้อ)
+const drive = state.drive || (state.drive = { seq: 0, folders: {} });
+function driveFolder(id) {
+  const f = drive.folders[id];
+  return {
+    getId: () => id,
+    getName: () => f.name,
+    getUrl: () => 'https://drive.google.com/drive/folders/' + id,
+    isTrashed: () => false,
+    createFile: (blob) => {
+      const bytes = Buffer.from((blob.getBytes() || []).map(b => b & 0xff));
+      const file = { id: 'file' + (++drive.seq), name: blob.getName() || 'file',
+                     size: bytes.length, sha256: crypto.createHash('sha256').update(bytes).digest('hex') };
+      f.files.push(file);
+      return { getId: () => file.id, getName: () => file.name, getSize: () => file.size,
+               getUrl: () => 'https://drive.google.com/file/d/' + file.id };
+    },
+  };
+}
+const DriveApp = {
+  getFolderById: (id) => {
+    if (!drive.folders[id]) throw new Error('harness: ไม่พบโฟลเดอร์ ' + id);
+    return driveFolder(id);
+  },
+  getFoldersByName: (name) => {
+    const ids = Object.keys(drive.folders).filter(i => drive.folders[i].name === String(name));
+    let i = 0;
+    return { hasNext: () => i < ids.length, next: () => driveFolder(ids[i++]) };
+  },
+  createFolder: (name) => {
+    const id = 'fld' + (++drive.seq);
+    drive.folders[id] = { name: String(name), files: [] };
+    return driveFolder(id);
+  },
+};
 const sandbox = {
   SpreadsheetApp: { getActiveSpreadsheet: () => ss },
+  DriveApp,
   Utilities: {
     // v3.10.2: เลียนข้อจำกัดจริงของ Apps Script — ตัวแปรแบบ "สตริง" เพี้ยนกับอักขระนอก ASCII (เคยทำให้ตัวจำลองนี้
     // เขียวทั้งที่ของจริงตอบ 'ลายเซ็นไม่ถูกต้อง') → สตริงนอก ASCII = โยนทิ้งให้เทสต์ตกดัง ๆ · ทางที่ถูกคือส่ง byte[]
@@ -98,9 +138,15 @@ const sandbox = {
       const raw = crypto.createHmac('sha256', toBuf(key, 'key')).update(toBuf(value, 'value')).digest();
       return Array.from(raw).map(b => (b > 127 ? b - 256 : b));   // Apps Script คืน byte[] แบบมีเครื่องหมาย
     },
-    newBlob: (text) => ({
-      getBytes: () => Array.from(Buffer.from(String(text), 'utf8')).map(b => (b > 127 ? b - 256 : b)),
+    // v3.11.0: newBlob รับได้ทั้งข้อความ (เซ็นลายเซ็น) และ byte[]+ชนิด+ชื่อ (ไฟล์อัปโหลดขึ้นไดรฟ์)
+    newBlob: (data, contentType, name) => ({
+      getBytes: () => Array.isArray(data)
+        ? data.map(b => (b > 127 ? b - 256 : b))
+        : Array.from(Buffer.from(String(data), 'utf8')).map(b => (b > 127 ? b - 256 : b)),
+      getContentType: () => contentType || '',
+      getName: () => name || '',
     }),
+    base64Decode: (s) => Array.from(Buffer.from(String(s), 'base64')).map(b => (b > 127 ? b - 256 : b)),
   },
   LockService: { getScriptLock: () => ({ tryLock: () => true, releaseLock: () => {} }) },
   ContentService: {
