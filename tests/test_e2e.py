@@ -297,7 +297,15 @@ def main():
         check("คัดลอกไฟล์ผลไป Downloads อัตโนมัติ", len(dl) == 1, str(dl))
 
         print("\n── (2) ไฟล์ที่เสร็จแล้วต้องไม่ค้างในคิว ──")
-        page.wait_for_selector(".qst-ready", timeout=10000)
+        try:
+            page.wait_for_selector(".qst-ready", timeout=10000)
+        except Exception:
+            # DEBUG v3.11.0: ป้ายไม่ขึ้น — ดูให้ชัดว่า backend ว่า done ไหม และหน้าเว็บวาดอะไรอยู่
+            print("DEBUG queueList:", page.inner_text("#queueList")[:400])
+            print("DEBUG /api/queue:", page.evaluate("fetch('/api/queue').then(r=>r.json())"))
+            print("DEBUG /api/files/results:", page.evaluate("fetch('/api/files/results').then(r=>r.json())"))
+            print("DEBUG JS_ERRORS:", JS_ERRORS[-5:])
+            raise
         check("หลังจบรอบ ป้ายขึ้น ✓ File ready", "File ready" in page.inner_text("#queueList"))
         page.click('[data-view="dashboard"]')
         page.click('[data-view="run"]')
