@@ -152,8 +152,10 @@ def main():
                                      "ERROR: เว็บช้า", "", "คดีที่1 บุกรุก ปี2561/ คดีที่2 ลักทรัพย์ ปี2559"])
     pr = engine.scan_progress(str(fp), "B", "F")
     check("นับครบ: 6 แถว · มีผล 4 · พบ 2 · ไม่พบ 1 · เลขใช้ไม่ได้ 1 · ผิดพลาด 1 · ยังไม่ค้น 1",
-          (pr["total"], pr["ok"], pr["found"], pr["notfound"], pr["invalid"], pr["errors"], pr["pending"])
+          (pr["total"], pr["ok"], pr["found"], pr["notfound"], pr["invalid_marked"], pr["errors"], pr["pending"])
           == (6, 4, 2, 1, 1, 1, 1), str(pr))
+    check("ตัวนับใหม่ไม่ทับคีย์ 'invalid' ของหน้าคิว (ป้าย 'ต้องแก้ไฟล์' ต้องไม่โผล่กับไฟล์ปกติ)",
+          "invalid" not in pr)
 
     print("\n── เครื่อง A: Super Admin + สมาชิก + เชื่อมศูนย์กลาง ──")
     r = c.post("/api/setup", json={"username": "admin1", "password": "secret9", "password2": "secret9",
@@ -198,7 +200,11 @@ def main():
     print("\n── คิวถูก prune → สรุปถูกเก็บก่อนงานหาย ──")
     st2, up2 = upload(c, make_xlsx("งานชุดสอง.xlsx", 2, seed=2))
     path2 = up2["job"]["path"]
-    fill(path2, [FOUND1, " - "])
+    fill(path2, [FOUND1, "⚠ เลขบัตรไม่ถูกต้อง (สั้นไป) — ไม่ได้ค้น"])
+    qj = next(j for j in c.get("/api/queue").get_json() if j["path"] == path2)
+    check("ไฟล์ครบที่มีแถว 'เลขใช้ไม่ได้' → คิวยังขึ้น File ready (ไม่ใช่ป้าย 'ต้องแก้ไฟล์' — บั๊กชนคีย์ invalid)",
+          qj["done"] and qj["invalid"] == "", str(qj))
+    fill(path2, [None, " - "])
     r = c.post("/api/queue/prune")
     names = r.get_json().get("names", [])
     check("prune เอาไฟล์ที่ครบออกจากคิว", "งานชุดสอง.xlsx" in names, str(names))
