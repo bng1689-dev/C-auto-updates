@@ -53,7 +53,7 @@ def check(name, cond, detail=""):
 
 
 def raw_post(payload, tok=TOKEN, admin_token=None, script_admin=ADMIN, state=None):
-    body = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+    body = hub.encode_payload(payload).decode("ascii")   # ก้อนจริงเป็น ASCII ล้วน (v3.10.2 — ดู hub.encode_payload)
     param = {"sign": hub.sign(body.encode("utf-8"), tok)}
     if admin_token:
         param["asign"] = hub.sign(body.encode("utf-8"), admin_token)
@@ -323,6 +323,18 @@ def main():
     check("เครื่องจริง (ไม่มี env ทดสอบ): รหัสลับฝัง+ซิงก์ 1 นาที · URL เก่าทั้งสองถูกย้าย+ลืมเลขกองกลาง · URL ที่ตั้งเองไม่ถูกแตะ",
           r2.stdout.split() == ["1", "1", "1", "1", "1"], (r2.stdout + r2.stderr)[-300:])
     check("คีย์เลขสมุดกองกลางที่ auth รีเซ็ตตอนย้าย ตรงกับของจริงใน server", server.LEDGER_SEQ_KEY == "ledger_hub_rev")
+
+    print("\n── v3.10.2: ข้อความไทยต้องไม่ทำให้ลายเซ็นเพี้ยน (ของจริงเคยตอบ 'ลายเซ็นไม่ถูกต้อง') ──")
+    body = hub.encode_payload({"note": "ทดสอบไทย ๑๒๓", "name": "ทีม — พิเศษ"})
+    check("ก้อนที่ส่งขึ้นศูนย์กลางเป็น ASCII ล้วนเสมอ (อักขระไทยถูก escape)", all(b < 128 for b in body)
+          and b"\\u0e17" in body, body[:60].decode("ascii", "replace"))
+    res = push_raw([dict(base, username="thaiuser", display_name="สมหมาย ใจดี", pending=0, active=1)], admin_token=ADMIN)
+    check("สมาชิกชื่อไทยผ่านศูนย์กลางจำลอง (ตัวจำลองเลียนข้อจำกัด HMAC ของ Google แล้ว) และอ่านกลับได้ครบ",
+          res.get("applied") == 1 and hub_members()["thaiuser"]["display_name"] == "สมหมาย ใจดี", str(res)[:200])
+    src_hub = (APP / "backend" / "hub.py").read_text(encoding="utf-8")
+    check("hub.py ไม่มีการส่งก้อนแบบ ensure_ascii=False เหลืออยู่", "ensure_ascii=False" not in src_hub)
+    src_gas = Path(__file__).resolve().parents[1].joinpath("tools", "hub_gas.js").read_text(encoding="utf-8")
+    check("hub_gas.js เซ็นจาก byte UTF-8 (newBlob) ไม่ใช่สตริงตรง ๆ", "newBlob(text).getBytes()" in src_gas)
     src_desk = (APP / "desktop.py").read_text(encoding="utf-8")
     check("จดจำการเข้าใช้งาน: หน้าต่างแอปไม่เปิดแบบ private (private_mode=False — คุกกี้ 30 วันอยู่ข้ามการปิดโปรแกรม)",
           "private_mode=False" in src_desk and "storage_path" in src_desk)

@@ -83,10 +83,24 @@ const ss = {
 const sandbox = {
   SpreadsheetApp: { getActiveSpreadsheet: () => ss },
   Utilities: {
-    computeHmacSha256Signature: (text, key) => {
-      const raw = crypto.createHmac('sha256', Buffer.from(String(key), 'utf8')).update(Buffer.from(String(text), 'utf8')).digest();
+    // v3.10.2: เลียนข้อจำกัดจริงของ Apps Script — ตัวแปรแบบ "สตริง" เพี้ยนกับอักขระนอก ASCII (เคยทำให้ตัวจำลองนี้
+    // เขียวทั้งที่ของจริงตอบ 'ลายเซ็นไม่ถูกต้อง') → สตริงนอก ASCII = โยนทิ้งให้เทสต์ตกดัง ๆ · ทางที่ถูกคือส่ง byte[]
+    computeHmacSha256Signature: (value, key) => {
+      const toBuf = (v, what) => {
+        if (Array.isArray(v)) return Buffer.from(v.map(b => b & 0xff));           // byte[] (จาก newBlob().getBytes())
+        const s = String(v);
+        if (/[^\x00-\x7F]/.test(s)) {
+          throw new Error('harness: HMAC แบบสตริงของ Apps Script เพี้ยนกับอักขระนอก ASCII (' + what +
+                          ') — สคริปต์ต้องใช้ Utilities.newBlob(...).getBytes() และโปรแกรมต้องส่งก้อน ASCII ล้วน');
+        }
+        return Buffer.from(s, 'utf8');
+      };
+      const raw = crypto.createHmac('sha256', toBuf(key, 'key')).update(toBuf(value, 'value')).digest();
       return Array.from(raw).map(b => (b > 127 ? b - 256 : b));   // Apps Script คืน byte[] แบบมีเครื่องหมาย
     },
+    newBlob: (text) => ({
+      getBytes: () => Array.from(Buffer.from(String(text), 'utf8')).map(b => (b > 127 ? b - 256 : b)),
+    }),
   },
   LockService: { getScriptLock: () => ({ tryLock: () => true, releaseLock: () => {} }) },
   ContentService: {

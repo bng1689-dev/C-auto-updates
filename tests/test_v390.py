@@ -51,7 +51,7 @@ def check(name, cond, detail=""):
 
 
 def raw_post(payload, tok=TOKEN, admin_token=None, script_admin=ADMIN):
-    body = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+    body = hub.encode_payload(payload).decode("ascii")   # ก้อนจริงเป็น ASCII ล้วน (v3.10.2 — ดู hub.encode_payload)
     param = {"sign": hub.sign(body.encode("utf-8"), tok)}
     if admin_token:
         param["asign"] = hub.sign(body.encode("utf-8"), admin_token)
@@ -367,8 +367,13 @@ def main():
     check("สมาชิกกดปุ่มซิงก์ไม่ได้ (403) แต่ขอดึงเบื้องหลังได้", sc.post("/api/hub/ledger/sync").status_code == 403 and sc.post("/api/hub/ledger/pull").get_json().get("enabled") is True)
     st = c.get("/api/hub/state").get_json()
     check("hub/state มีผลซิงก์สมุดกองกลาง + รายการฟิลด์", st.get("ledger", {}).get("ok") is True and st.get("ledger_fields") == list(hub.LEDGER_FIELDS))
-    check("v3.9.2: hub/state บอกรุ่นสคริปต์ที่ Deploy อยู่จริง (จาก ver ในคำตอบ) ตรงกับที่โปรแกรมต้องการ",
-          st.get("script", {}).get("ver") == hub.HUB_SCRIPT_REQUIRED and st.get("script_required") == hub.HUB_SCRIPT_REQUIRED, str(st.get("script")))
+    def _ver_ok(v, need):                      # v3.10.2: สคริปต์ใหม่กว่าที่ต้องการ = ใช้ได้ (เทียบรายช่วง)
+        a = [int(x) for x in str(v or "0").split(".")]; b = [int(x) for x in str(need).split(".")]
+        a += [0] * (len(b) - len(a)); b += [0] * (len(a) - len(b))
+        return a >= b
+    check("v3.9.2: hub/state บอกรุ่นสคริปต์ที่ Deploy อยู่จริง (จาก ver ในคำตอบ) ใช้กับโปรแกรมได้ (≥ ที่ต้องการ)",
+          _ver_ok(st.get("script", {}).get("ver"), hub.HUB_SCRIPT_REQUIRED)
+          and st.get("script_required") == hub.HUB_SCRIPT_REQUIRED, str(st.get("script")))
     real_post = server.hub._post
     server.hub._post = lambda u, p, t, admin_token=None: {"ok": True, "stored": 0, "kind": p.get("kind")}   # สคริปต์รุ่นเก่า: ไม่มี ver
     server._hub_push_now()
@@ -376,7 +381,7 @@ def main():
           c.get("/api/hub/state").get_json().get("script", {}).get("ver") == "old")
     server.hub._post = real_post
     server._hub_push_now()
-    check("กลับมาสคริปต์จริง → รุ่นกลับมาถูกต้อง", c.get("/api/hub/state").get_json().get("script", {}).get("ver") == hub.HUB_SCRIPT_REQUIRED)
+    check("กลับมาสคริปต์จริง → รุ่นกลับมาถูกต้อง (≥ ที่ต้องการ)", _ver_ok(c.get("/api/hub/state").get_json().get("script", {}).get("ver"), hub.HUB_SCRIPT_REQUIRED))
     check("ไม่มี endpoint กระดานจากศูนย์กลางแบบเก่าแล้ว (หน้ากองกลางไม่ยิงศูนย์กลางทุก 8 วิ)", c.get("/api/hub/board").status_code == 404)
 
     print("\n── ทีมซิงก์ผ่านไดเรกทอรีสมาชิก (\"เครื่อง Superadmin เป็นผู้จัดการทุกสิทธิ์ได้\") ──")

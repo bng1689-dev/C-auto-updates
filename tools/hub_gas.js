@@ -76,7 +76,7 @@
  */
 
 // v3.9.2: รุ่นของสคริปต์นี้ — ส่งกลับในทุกคำตอบ (ver) ให้โปรแกรมโชว์ว่า Deploy รุ่นไหนอยู่จริง (รุ่นเก่าไม่ส่ง = 'รุ่นเก่า')
-var HUB_SCRIPT_VERSION = '3.10.0';
+var HUB_SCRIPT_VERSION = '3.10.2';
 
 var HUB_TOKEN = 'เปลี่ยนรหัสนี้ก่อนใช้งานจริง';
 // v3.7.0: รหัสผู้ดูแลศูนย์กลาง — เซ็นก้อน members ที่ "แก้ไดเรกทอรี" (ดูกติกาด้านบน) · ต้องต่างจาก HUB_TOKEN
@@ -456,7 +456,10 @@ function _sheet() {
 }
 
 function _signWith(text, key) {
-  var raw = Utilities.computeHmacSha256Signature(text, key);
+  // v3.10.2: คำนวณจาก byte UTF-8 ตรง ๆ — ตัวแปรแบบสตริงของ computeHmacSha256Signature เพี้ยนกับอักขระนอก ASCII
+  // (โปรแกรมรุ่น 3.10.2 ส่งก้อนแบบ ASCII ล้วนอยู่แล้ว จึงเข้ากันได้ทั้งสคริปต์เก่า/ใหม่ — บรรทัดนี้กันเผื่อไคลเอนต์รุ่นเก่า)
+  var raw = Utilities.computeHmacSha256Signature(Utilities.newBlob(text).getBytes(),
+                                                 Utilities.newBlob(String(key)).getBytes());
   return raw.map(function (b) {
     return ('0' + (b & 0xff).toString(16)).slice(-2);
   }).join('');
