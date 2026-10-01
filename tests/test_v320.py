@@ -24,7 +24,12 @@ def check(name, cond, detail=""):
     else: FAIL += 1; print(f"  ✗ {name} {detail}")
 
 def seed(uid, n, days_ago=0):
-    ts = datetime.now() - timedelta(days=days_ago)
+    now = datetime.now()
+    ts = now - timedelta(days=days_ago)
+    if ts.month != now.month:
+        # วันที่ 1 ของเดือน: 'เมื่อวาน' หลุดไปเดือนก่อน แต่กราฟ/ยอดดูเป็นรายเดือนปัจจุบัน
+        # → ใช้วันพรุ่งนี้แทน ได้สองวันคนละวันที่ในเดือนเดียวกันเสมอ (ชุดทดสอบต้องเขียวทุกวันของปี)
+        ts = now + timedelta(days=days_ago)
     with db.get_conn() as c:
         for i in range(n):
             c.execute("INSERT INTO searches(ts,ym,account,file,row,national_id,outcome,case_count,detail,user_id,id_hash,incomplete,attempt) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
