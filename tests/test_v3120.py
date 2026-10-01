@@ -120,6 +120,18 @@ def main():
     with c.session_transaction() as s:
         s["auth_method"] = "password"
 
+    print("\n── เปลี่ยนรหัสผ่านแล้ว ตัวนับครั้งผิดของรหัสยืนยันต้องหายด้วย (รีวิว PR #40) ──")
+    for _ in range(8):
+        r = c.post("/api/clear/searches", json={"code": "wrong-again"})
+        if r.status_code == 429:
+            break
+    check("(เตรียม) ใส่รหัสผิดจนช่องยืนยันถูกล็อก", r.status_code == 429, str(r.status_code))
+    r = c.post("/api/password", json={"current": "newsecret7", "new": "third-pass9"})
+    check("(เตรียม) เปลี่ยนรหัสผ่านอีกครั้ง", r.status_code == 200, str(r.get_json()))
+    r = c.post("/api/clear/searches", json={"code": "third-pass9"})
+    check("หลังเปลี่ยนรหัส: รหัสใหม่ใช้ยืนยันได้ทันที ไม่ติดล็อกของรหัสเก่า",
+          r.status_code == 200, f"{r.status_code} {r.get_json()}")
+
     print("\n── สมาชิกธรรมดา: ล้างของตัวเองไม่ต้องใส่รหัส (ขอบเขตแคบ) ──")
     cw = server.app.test_client()
     r = cw.post("/api/login", json={"username": "worker1", "password": "pass66"})
@@ -146,6 +158,19 @@ def main():
     server._hub_push_now, server._members_sync_now, server._ledger_sync_now, server.time.sleep = real
     check("เปิดโปรแกรม = ซิงก์ครบสามอย่าง 'ก่อน' เข้ารอบหลับรอบแรก",
           calls == ["push", "members", "ledger", "sleep"], str(calls))
+
+    # ตัวซิงก์ตอนเปิดถือล็อกสมาชิกอยู่ → ล็อกอินช่วงนั้นต้อง 'รอ' ไม่ใช่ถือว่าเสร็จ (รีวิว PR #40)
+    import time as _t
+    server._members_lock.acquire()
+    threading.Thread(target=lambda: (_t.sleep(0.8), server._members_lock.release()), daemon=True).start()
+    t0 = _t.time()
+    res = server._members_sync_or_wait("login", wait_s=5)
+    waited = _t.time() - t0
+    check("มีการซิงก์ค้างอยู่ → ตัวช่วยล็อกอินรอจนรอบนั้นเสร็จ (ไม่เกินเพดาน)",
+          "กำลังซิงก์" in str(res.get("error")) and 0.6 <= waited < 4.0, f"{res} waited={waited:.2f}")
+    check("ล็อกอินใช้ตัวช่วยที่รอ (ทั้งสองจุดใน api_login)",
+          (Path(server.__file__).read_text(encoding="utf-8").split("def api_login")[1]
+           .split("\ndef ")[0].count("_members_sync_or_wait(\"login\")")) == 2)
     server.auth.update_config(hub_enabled=False)
 
     print("\n── โหมดหน้าจอเดิม + เลือก 'บุคคล' (Chromium + เว็บ CRIMES จำลอง) ──")
@@ -220,6 +245,47 @@ def main():
         check("หน้าเข้าสู่ระบบ: เงียบ ไม่แตะอะไร", ec6 == {"ticked": False, "person": False}
               and engine.is_login_page(p3))
         ctx3.close()
+
+        print("\n── กรณีขอบจากรีวิว PR #40 (DOM จำลองตรง ๆ บน Chromium) ──")
+        p4 = b.new_page()
+        # (1) ปุ่ม 'ยืนยัน' ของหน้าข้างหลังกล่อง vs ปุ่ม 'ตกลง' ของกล่องเอง (โครงแบบ Nebular overlay ใน nb-layout)
+        p4.set_content("""<html><body><div id="layout">
+          <form><input id="pageField"><button type="button" id="pageOk"
+            onclick="window.__page=(window.__page||0)+1">ยืนยัน</button></form>
+          <div id="ov" style="position:fixed;inset:0;background:#0006"><div id="dlg" style="background:#fff;margin:60px;padding:20px">
+            <label><input type="checkbox" id="cc"> <span>ใช้โหมดหน้าจอเดิม</span></label>
+            <div><button type="button" id="dlgOk" onclick="window.__dlg=(window.__dlg||0)+1">ตกลง</button></div>
+          </div></div></div></body></html>""")
+        r1 = engine.enter_classic_mode(p4)
+        check("กดปุ่ม 'ตกลง' ของกล่องเอง ไม่ใช่ปุ่ม 'ยืนยัน' ของหน้าข้างหลัง",
+              r1.get("ticked") and p4.evaluate("() => [window.__dlg||0, window.__page||0]") == [1, 0]
+              and p4.evaluate("() => document.getElementById('cc').checked"), str(r1))
+        # (2) ติ๊กอยู่แล้ว + ไม่มีปุ่มที่ตรง → ต้องเงียบ (ไม่รายงานว่าทำ ไม่บันทึกซ้ำทุกรอบตรวจ)
+        p4.set_content("""<html><body><div><label><input type="checkbox" id="cc" checked>
+          <span>ใช้โหมดหน้าจอเดิม</span></label><button>ยืนยันการเปลี่ยนแปลง</button></div></body></html>""")
+        notes2 = []
+        r2 = [engine.enter_classic_mode(p4, note=notes2.append) for _ in range(3)]
+        check("ติ๊กอยู่แล้ว+ไม่เจอปุ่ม → ไม่รายงาน ไม่บันทึกซ้ำ (3 รอบ = 0 บรรทัด)",
+              all(x == {"ticked": False, "person": False} for x in r2) and notes2 == []
+              and p4.evaluate("() => document.getElementById('cc').checked"), f"{r2} {notes2}")
+        # (3) ช่องติ๊กแบบ custom (role=checkbox) ที่ติ๊กอยู่แล้ว → ห้ามคลิกจนกลายเป็นติ๊กออก
+        p4.set_content("""<html><body><div id="d"><div id="cb" role="checkbox" aria-checked="true"
+            onclick="this.setAttribute('aria-checked', this.getAttribute('aria-checked')==='true'?'false':'true')">
+            <span>ใช้โหมดหน้าจอเดิม</span></div>
+          <button onclick="window.__mode=document.getElementById('cb').getAttribute('aria-checked')">ยืนยัน</button></div></body></html>""")
+        r3 = engine.enter_classic_mode(p4)
+        check("custom checkbox ที่ติ๊กอยู่แล้ว: ไม่สลับออก และยืนยันด้วยโหมดเดิม",
+              p4.evaluate("() => document.getElementById('cb').getAttribute('aria-checked')") == "true"
+              and p4.evaluate("() => window.__mode") == "true", str(r3))
+        # (4) label[for] — กล่องเดียวกันมีช่อง 'ไม่ต้องแสดงอีก' อยู่ก่อน ต้องติ๊กช่องของโหมดเดิมเท่านั้น
+        p4.set_content("""<html><body><div><input id="dont" type="checkbox"><label for="dont">ไม่ต้องแสดงข้อความนี้อีก</label>
+          <input id="classic" type="checkbox"><label for="classic">ใช้โหมดหน้าจอเดิม</label></div>
+          <button>ยืนยัน</button></body></html>""")
+        engine.enter_classic_mode(p4)
+        check("label[for]: ติ๊กช่องของ 'ใช้โหมดหน้าจอเดิม' เท่านั้น ไม่ไปติ๊กช่องอื่นในกล่อง",
+              p4.evaluate("() => [document.getElementById('classic').checked, document.getElementById('dont').checked]")
+              == [True, False])
+        p4.close()
         b.close()
 
     print("\n── แหล่งที่มา/การเดินสายในโปรแกรม ──")
@@ -232,6 +298,12 @@ def main():
           "enter_classic_mode" in (app_backend / "engine.py").read_text(encoding="utf-8").split("def search_one_id")[1][:3000])
     check("หน้าเว็บ: ไม่มีการ์ดตั้งรหัสยืนยันแยกแล้ว · ล้างทั้งหมดใช้รหัสผ่านของผู้ใช้",
           "newActionCode" not in html_src and "ใส่รหัสผ่านของคุณเพื่อยืนยัน" in html_src)
+    cs_src = html_src.split("async function clearSearches")[1].split("\n}\n")[0]
+    check("ล้างทั้งระบบขอรหัสผ่านในช่องปิดบัง (ไม่ใช้ prompt() ที่โชว์รหัสบนจอ — รีวิว PR #40)",
+          "prompt(" not in cs_src and "askActionPassword(" in cs_src
+          and 'id="actPwInput" class="field" type="password"' in html_src)
+    check("นับถอยหลังเริ่มเองใช้เวลาหลังตรวจหน้าคั่น (ช่วงกด 'หยุด' ได้ครบ 30 วิ)",
+          "now = time.time()" in worker_src.split("enter_classic_mode(page, note=self._log)")[1][:900])
 
     print(f"\n==== ผล: ผ่าน {PASS} · ตก {FAIL} ====")
     return 1 if FAIL else 0
