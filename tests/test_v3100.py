@@ -369,17 +369,18 @@ def main():
           and "ค้าง" in (r.get_json() or {}).get("error", ""), str(r.get_json()))
     with db.get_conn() as conn:
         conn.execute("DELETE FROM users WHERE username LIKE 'cap%'")
-    # อนุมัติ/ปฏิเสธ = งานของเครื่องผู้จัดการ (มีรหัสผู้ดูแล) — เหมือนทีม/กองกลาง v3.9.1
+    # อนุมัติ/ปฏิเสธ = งานของผู้จัดการ — v3.13.0: Superadmin ที่ใช้สิทธิ์ผู้ดูแลอยู่ (เหมือนทีม/กองกลาง v3.9.1)
     uid_g = db.register_user("gatecheck", "pass88")
-    auth.update_config(hub_admin_token="")
+    from _app import drop_hub_admin
+    drop_hub_admin()
     r = c.post(f"/api/admin/members/{uid_g}/approve", json={})
     rd = c.delete(f"/api/admin/members/{uid_g}")
-    check("เครื่อง Super Admin ที่ไม่มีรหัสผู้ดูแล: อนุมัติ/ปฏิเสธคำขอไม่ได้ (403 need_admin_token)",
+    check("Superadmin ที่ยังไม่ได้ใช้สิทธิ์ผู้ดูแลในรอบนี้: อนุมัติ/ปฏิเสธคำขอไม่ได้ (403 need_admin_token)",
           r.status_code == 403 and (r.get_json() or {}).get("need_admin_token") is True
           and rd.status_code == 403 and (rd.get_json() or {}).get("need_admin_token") is True, f"{r.status_code} {rd.status_code}")
-    auth.update_config(hub_admin_token=ADMIN)
+    c.post("/api/auth/confirm-password", json={"password": "secret9"})
     r = c.post(f"/api/admin/members/{uid_g}/approve", json={"role": "member"})
-    check("ใส่รหัสผู้ดูแลแล้วอนุมัติได้ตามเดิม", r.status_code == 200 and db.get_user(uid_g)["active"] == 1, str(r.get_json()))
+    check("ยืนยันรหัสผ่าน (ถอดซองสิทธิ์ผู้ดูแล) แล้วอนุมัติได้ตามเดิม", r.status_code == 200 and db.get_user(uid_g)["active"] == 1, str(r.get_json()))
     # v3.10.0: ชีตว่าง + สคริปต์ตั้ง ADMIN_TOKEN แล้ว → ก้อนแรกต้องเซ็นผู้ดูแล (รีวิว Codex PR #36 —
     # รหัสร่วมสาธารณะห้ามใช้ยึดไดเรกทอรีที่เพิ่งถูกล้าง/สร้างใหม่) · สคริปต์ที่ยังไม่ตั้ง ADMIN_TOKEN รับแบบเดิม (test_v370 ครอบ)
     empty2 = TEST_DATA / "hub_empty2.json"
