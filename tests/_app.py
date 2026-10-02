@@ -72,3 +72,22 @@ def _chrome():
 
 
 CHROME = _chrome()
+
+
+def grant_hub_admin(username, password, token):
+    """v3.13.0: ผูกสิทธิ์ผู้ดูแลศูนย์กลางกับบัญชีนี้ + ถอดไว้ในหน่วยความจำ (เท่ากับ Superadmin เข้าด้วยรหัสผ่านที่เครื่องนี้)
+    ใช้แทน 'ใส่ 🔑 ในเครื่อง' ของรุ่นก่อน — ต้องเรียกหลัง import server แล้ว"""
+    from backend import server
+    import auth
+    import db
+    u = db.get_user_by_username(username)
+    env = auth.seal_admin_key(token, password)
+    db.set_admin_envelope(u["id"], env)
+    server._admin_hold(u["id"], token, env)
+    return env
+
+
+def drop_hub_admin():
+    """v3.13.0: ปล่อยสิทธิ์ผู้ดูแลที่ถอดไว้ (เท่ากับ Superadmin ออกจากระบบ/ยังไม่ได้ยืนยันรหัสผ่านในรอบนี้)"""
+    from backend import server
+    server._admin_release()

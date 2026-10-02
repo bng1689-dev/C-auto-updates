@@ -58,14 +58,15 @@ def main():
           and admin.get("/api/live/board").get_json()["can_edit"] is True and admin.get("/api/live/board").get_json()["manager"] is True)
     lid = r.get_json()["id"]
 
-    print("\n── เชื่อมศูนย์กลางแล้ว แต่เครื่องนี้ไม่มีรหัสผู้ดูแล → ดูได้อย่างเดียว ──")
-    server.auth.update_config(hub_url=URL, hub_token="tok", hub_enabled=True, hub_admin_token="")
+    print("\n── เชื่อมศูนย์กลางแล้ว แต่ Superadmin ยังไม่ได้ผูกสิทธิ์ผู้ดูแล → ดูได้อย่างเดียว ──")
+    server.auth.update_config(hub_url=URL, hub_token="tok", hub_enabled=True)
     pending_before = db.count_pending_ledger()      # รายการที่บันทึกตอนเครื่องเดี่ยว รอส่งอยู่แล้ว 1 (ปกติ)
     me = admin.get("/api/me").get_json()
     check("/api/me: central_manager=False", me.get("central_manager") is False)
     r = admin.post("/api/admin/teams", json={"name": "ทีม B", "member_ids": []})
-    check("สร้างทีม → 403 need_admin_token พร้อมข้อความบอกให้ไปเครื่อง Super Admin",
-          r.status_code == 403 and r.get_json().get("need_admin_token") is True and "รหัสผู้ดูแล" in r.get_json().get("error", ""), r.get_data(as_text=True)[:160])
+    check("สร้างทีม → 403 need_admin_token พร้อมข้อความบอกให้ผูกสิทธิ์ผู้ดูแลกับบัญชี Superadmin",
+          r.status_code == 403 and r.get_json().get("need_admin_token") is True and r.get_json().get("need_bind") is True
+          and "สิทธิ์ผู้ดูแล" in r.get_json().get("error", ""), r.get_data(as_text=True)[:160])
     check("แก้ทีม → 403", admin.put(f"/api/admin/teams/{tid}", json={"member_ids": []}).status_code == 403)
     check("ลบทีม → 403 (ทีมยังอยู่)", admin.delete(f"/api/admin/teams/{tid}").status_code == 403 and db.get_team(tid) is not None)
     check("บันทึกกองกลาง → 403 · ลบรายการ → 403 (รายการยังอยู่)",
@@ -77,17 +78,19 @@ def main():
     check("อ่านทีมได้ตามปกติ", admin.get("/api/admin/teams").status_code == 200)
     lead = server.app.test_client()
     lead.post("/api/login", json={"username": "lead", "password": "pass77"})
-    check("สมาชิกที่มีสิทธิ์จัดทีม บนเครื่องที่ไม่มีรหัสผู้ดูแล → 403 เช่นกัน", lead.post("/api/admin/teams", json={"name": "x"}).status_code == 403)
+    check("สมาชิกที่มีสิทธิ์จัดทีม → 403 เช่นกัน", lead.post("/api/admin/teams", json={"name": "x"}).status_code == 403)
 
-    print("\n── ใส่รหัสผู้ดูแล → เครื่องนี้เป็นเครื่องผู้จัดการ ──")
-    server.auth.update_config(hub_admin_token="admin-token-xyz-12345")
+    print("\n── v3.13.0: Superadmin ผูก+ใช้สิทธิ์ผู้ดูแล → จัดได้ (ผูกกับบัญชี ไม่ใช่เครื่อง) ──")
+    from _app import grant_hub_admin
+    grant_hub_admin("admin1", "secret9", "admin-token-xyz-12345")
     check("/api/me: central_manager=True", admin.get("/api/me").get_json().get("central_manager") is True)
     check("สร้าง/แก้ทีมได้ · บันทึก/ลบกองกลางได้",
           admin.post("/api/admin/teams", json={"name": "ทีม B", "member_ids": []}).status_code == 200
           and admin.put(f"/api/admin/teams/{tid}", json={"member_ids": [users["somchai"], users["admin1"]]}).status_code == 200
           and admin.post("/api/admin/ledger", json={"user_id": users["somchai"], "kind": "out", "amount": 1}).status_code == 200
           and admin.delete(f"/api/admin/ledger/{lid}").status_code == 200)
-    check("สมาชิกที่มีสิทธิ์จัดทีม บนเครื่องผู้จัดการ → ทำได้ (สิทธิ์เดิม)", lead.post("/api/admin/teams", json={"name": "ทีม C", "member_ids": []}).status_code == 200)
+    check("v3.13.0: สมาชิกที่มีสิทธิ์จัดทีม แม้อยู่เครื่องเดียวกับ Superadmin ที่ใช้สิทธิ์อยู่ → 403 (สิทธิ์ผู้ดูแลเป็นของ Superadmin เท่านั้น)",
+          lead.post("/api/admin/teams", json={"name": "ทีม C", "member_ids": []}).status_code == 403)
     sc = server.app.test_client()
     sc.post("/api/login", json={"username": "somchai", "password": "pass66"})
     check("สมาชิกไม่มีสิทธิ์ → 403 เรื่องสิทธิ์ (ตรวจก่อนเรื่องเครื่อง) · บันทึกกองกลาง 403",
@@ -95,7 +98,7 @@ def main():
           and sc.post("/api/admin/ledger", json={"user_id": users["somchai"], "kind": "in", "amount": 1}).status_code == 403)
 
     print("\n── ปิดการเชื่อมต่อ → กลับเป็นเครื่องเดี่ยว ──")
-    server.auth.update_config(hub_enabled=False, hub_admin_token="")
+    server.auth.update_config(hub_enabled=False)
     check("ปิดศูนย์กลางแล้วจัดเองได้อีก", admin.get("/api/me").get_json().get("central_manager") is True
           and admin.post("/api/admin/teams", json={"name": "ทีม D", "member_ids": []}).status_code == 200)
 

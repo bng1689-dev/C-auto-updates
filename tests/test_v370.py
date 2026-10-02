@@ -5,7 +5,9 @@
   เครื่อง A = โปรเซสนี้ · เครื่อง B = โปรเซสแยก (_hub_machine.py) ฐานข้อมูลคนละชุด · ศูนย์กลาง = hub_gas.js ตัวจริง
   ผ่าน tests/gas_harness.js (จำลอง SpreadsheetApp เก็บลงไฟล์ JSON ใบเดียวกัน)
   • เครื่องแรกสมัครพร้อมรหัสเชื่อมต่อ (+รหัสผู้ดูแล) → Super Admin ขึ้นไดเรกทอรีกลาง · เครื่องเพิ่มเติม 'เข้าร่วม' ดึงสมาชิกมา
-  • เครื่องที่มีแค่รหัสเชื่อมต่อ (สมาชิก): เปลี่ยนรหัสตัวเองขึ้นกลางได้ · สร้าง/แก้คนอื่นถูกปัดตก ค้างไว้จนใส่รหัสผู้ดูแล
+  • เครื่องที่มีแค่รหัสเชื่อมต่อ (สมาชิก): เปลี่ยนรหัสตัวเองขึ้นกลางได้
+  • v3.13.0: ไม่มี 🔑 ประจำเครื่อง — Superadmin (ผูกสิทธิ์ผู้ดูแลแล้ว) เข้าสู่ระบบที่เครื่องไหนก็สร้าง/แก้ขึ้นกลางได้ทันที
+    ผู้จัดการสมาชิกคนอื่นทำงานที่ต้องลายเซ็นผู้ดูแลไม่ได้ (403 ไม่ค้าง) แต่ตั้งรหัสผ่านใหม่ให้สมาชิกธรรมดาได้
   • รหัสร่วม (HUB_TOKEN) ตั้งตัวเองเป็น Super Admin / เปลี่ยนรหัสคนอื่น / แก้ด้วยรหัสผู้ดูแลผิด → ศูนย์กลางปัดตก
   • ศูนย์กลางไม่ยอมให้ไม่เหลือ Super Admin ที่เปิดใช้งาน (สองเครื่องปิดกันเองพร้อมกัน → เหลืออย่างน้อยหนึ่ง)
   • ลำดับการแก้ตัดสินด้วยเลขรุ่น (rev) ของศูนย์กลาง ไม่ใช่นาฬิกาเครื่อง — เครื่องที่นาฬิกาอยู่ปี 2099 ก็ไม่ชนะ
@@ -139,62 +141,84 @@ def main():
     check("ซิงก์ A สำเร็จ", res.get("ok") is True and not res.get("rejected"), str(res.get("error")))
     check("somchai อยู่บนไดเรกทอรีกลาง rev=1", hub_members().get("somchai", {}).get("rev") == 1)
 
-    print("\n── เครื่อง B เข้าร่วมแบบเครื่องสมาชิก (ไม่มีรหัสผู้ดูแล) ──")
+    print("\n── เครื่อง B เข้าร่วม · สมาชิกเปลี่ยนรหัสตัวเอง · Superadmin เข้าที่ B ได้สิทธิ์ผู้ดูแลทันที (v3.13.0 ไม่มี 🔑) ──")
     out = machine_b([
         {"op": "join", "code": code},
         {"op": "login", "u": "somchai", "p": "pass66", "as": "login_somchai"},
         {"op": "password", "cur": "pass66", "new": "newpass6"},
         {"op": "logout"},
         {"op": "sync", "as": "sync_pw"}, {"op": "pending", "as": "pending_pw"},
+        {"op": "envelope", "u": "admin1", "as": "env_b"},
         {"op": "login", "u": "admin1", "p": "secret9", "as": "login_admin"},
+        {"op": "hold", "as": "hold_b"},
         {"op": "create", "u": "wichai", "p": "pass77", "name": "วิชัย"},
         {"op": "update", "u": "somchai", "fields": {"display_name": "สมชาย ใหม่"}},
         {"op": "sync", "as": "sync_admin"}, {"op": "pending", "as": "pending_admin"},
-        {"op": "members"}, {"op": "state"},
+        {"op": "members"}, {"op": "state"}, {"op": "config_file", "as": "cfg_b"},
     ])
     j = out["join"]
     check("B เข้าร่วม → ok ดึงสมาชิก 2 คน, Super Admin คือ admin1", j[0] == 200 and j[1].get("members") == 2 and j[1].get("admins") == ["admin1"], str(j))
     check("B: somchai เข้าด้วยรหัสเดิมได้ (แฮชจาก A ใช้ได้ที่ B)", out["login_somchai"][0] == 200, str(out["login_somchai"]))
-    check("B: somchai เปลี่ยนรหัสตัวเอง → ขึ้นกลางได้แม้ไม่มีรหัสผู้ดูแล (ไม่ค้าง)",
+    check("B: somchai เปลี่ยนรหัสตัวเอง → ขึ้นกลางได้แม้ไม่มีสิทธิ์ผู้ดูแล (ไม่ค้าง)",
           out["password"][0] == 200 and out["sync_pw"]["ok"] and not out["sync_pw"]["rejected"] and out["pending_pw"] == 0, str(out["sync_pw"]))
-    check("กลาง: somchai rev=2 (รหัสเปลี่ยน) แต่ยังเป็น member", hub_members()["somchai"]["rev"] == 2 and hub_members()["somchai"]["role"] == "member")
-    check("B: admin1 ของ A เข้าที่ B ได้ · สร้าง wichai/แก้ชื่อ somchai ในเครื่องได้",
-          out["login_admin"][0] == 200 and out["create"][0] == 200 and out["update"][0] == 200, f"{out['login_admin']} {out['create']} {out['update']}")
-    rej = {x["username"]: x["reason"] for x in (out["sync_admin"]["rejected"] or [])}
-    check("B: ไม่มีรหัสผู้ดูแล → กลางปัดตกการสร้าง wichai และแก้ชื่อ somchai (reason=auth) ค้าง 2 รายการ",
-          out["sync_admin"]["ok"] and rej == {"wichai": "auth", "somchai": "auth"} and out["pending_admin"] == 2, str(out["sync_admin"]))
-    st = out["state"]
-    check("B: แถบสถานะบอก 'รอส่ง 2' พร้อมคำอธิบายให้ใส่รหัสผู้ดูแล",
-          st["last"].get("pending") == 2 and "รหัสผู้ดูแล" in st["last"].get("hint", "") and st["last"].get("admin") is False, str(st))
+    check("กลาง: somchai ยังเป็น member (เปลี่ยนรหัสตัวเองไม่ทำให้บทบาทเปลี่ยน)", hub_members()["somchai"]["role"] == "member")
+    check("v3.13.0: ซองสิทธิ์ผู้ดูแลของ admin1 (ผูกตอนตั้งค่าเครื่อง A) มาถึง B กับไดเรกทอรี — เป็นข้อมูลเข้ารหัส ไม่ใช่รหัสจริง",
+          out["env_b"].startswith("v1$") and ADMIN not in out["env_b"] and ADMIN not in json.dumps(hub_members(), ensure_ascii=False), out["env_b"][:40])
+    check("v3.13.0: admin1 เข้าที่ B ด้วยรหัสผ่าน → ถือสิทธิ์ผู้ดูแลในเครื่อง B ทันที (ไม่ต้องใส่อะไรเพิ่ม)",
+          out["login_admin"][0] == 200 and out["hold_b"] == "admin1", f"{out['login_admin']} {out['hold_b']}")
+    check("B: สร้าง wichai/แก้ชื่อ somchai ได้", out["create"][0] == 200 and out["update"][0] == 200, f"{out['create']} {out['update']}")
+    check("B: ซิงก์ → กลางรับหมดด้วยลายเซ็นผู้ดูแล (admin=True) ไม่ค้าง",
+          out["sync_admin"]["ok"] and not out["sync_admin"]["rejected"] and out["sync_admin"]["admin"] is True
+          and out["pending_admin"] == 0, str(out["sync_admin"]))
+    check("B: แถบสถานะไม่มีรายการรอส่ง", out["state"]["last"].get("pending") == 0 and out["state"]["last"].get("admin") is True, str(out["state"]))
+    check("v3.13.0: config.json ของ B ไม่มีรหัสผู้ดูแล (ไม่มี 🔑 ในเครื่อง)",
+          "hub_admin_token" not in out["cfg_b"] and ADMIN not in json.dumps(out["cfg_b"]), str(sorted(out["cfg_b"])))
     hm = hub_members()
-    check("กลาง: ยังไม่มี wichai · ชื่อ somchai ยังเป็นของเดิม", "wichai" not in hm and hm["somchai"]["display_name"] == "สมชาย")
-    mb = {m["username"]: m for m in out["members"]}
-    check("B: ในเครื่องยังมี wichai และชื่อใหม่ (ค้างไว้ ไม่หาย)", "wichai" in mb and mb["somchai"]["display_name"] == "สมชาย ใหม่")
+    check("กลาง: มี wichai rev=1 · somchai ชื่อใหม่ rev=3",
+          hm.get("wichai", {}).get("rev") == 1 and hm["somchai"]["display_name"] == "สมชาย ใหม่" and hm["somchai"]["rev"] == 3, str(hm.get("somchai")))
 
-    print("\n── เครื่อง A ซิงก์ → ได้รหัสใหม่ของ somchai · ของที่ B ถูกปัดตกไม่มาถึง ──")
+    print("\n── เครื่อง A ซิงก์ → ได้รหัสใหม่ของ somchai · wichai · ชื่อใหม่ ──")
     res = server._members_sync_now("test")
     s = res.get("summary") or {}
-    check("A: ปรับ somchai · รหัสเปลี่ยน · ไม่มี wichai", "somchai" in s.get("updated", []) and somchai_id in s.get("password_changed", [])
-          and s.get("created") == [], str(s))
+    check("A: สร้าง wichai · ปรับ somchai · รหัสเปลี่ยน", s.get("created") == ["wichai"] and "somchai" in s.get("updated", [])
+          and somchai_id in s.get("password_changed", []), str(s))
     check("A: session เดิมของ somchai ถูกตัด (รหัสถูกเปลี่ยนจากเครื่องอื่น)", sc.get("/api/me").status_code == 401)
     check("A: PASSCODE ของ somchai บน A ถูกยกเลิก", db.has_passcode(somchai_id) is False)
-    check("A: ชื่อที่แสดงยังเป็นของเดิม (การแก้ที่ไม่มีรหัสผู้ดูแลไม่ขึ้นกลาง)", db.get_user(somchai_id)["display_name"] == "สมชาย")
+    check("A: ชื่อใหม่ของ somchai มาถึง", db.get_user(somchai_id)["display_name"] == "สมชาย ใหม่")
     check("A: รหัสเดิมของ somchai ใช้ไม่ได้ รหัสใหม่ใช้ได้",
           sc.post("/api/login", json={"username": "somchai", "password": "pass66"}).status_code == 401
           and sc.post("/api/login", json={"username": "somchai", "password": "newpass6"}).status_code == 200)
     sc.post("/api/logout")
-
-    print("\n── B ใส่รหัสผู้ดูแล → รายการที่ค้างขึ้นกลาง ──")
-    out = machine_b([{"op": "set_admin_token", "token": ADMIN}, {"op": "sync"}, {"op": "pending"}, {"op": "state"}])
-    check("B: ใส่รหัสผู้ดูแลแล้วซิงก์ → กลางรับหมด ไม่ค้าง",
-          out["sync"]["ok"] and not out["sync"]["rejected"] and out["sync"]["admin"] is True and out["pending"] == 0, str(out["sync"]))
-    hm = hub_members()
-    check("กลาง: มี wichai rev=1 · somchai ชื่อใหม่ rev=3", hm.get("wichai", {}).get("rev") == 1 and hm["somchai"]["display_name"] == "สมชาย ใหม่" and hm["somchai"]["rev"] == 3, str(hm.get("somchai")))
-    res = server._members_sync_now("test")
-    s = res.get("summary") or {}
-    check("A: สร้าง wichai · ชื่อใหม่ของ somchai มาถึง", s.get("created") == ["wichai"] and db.get_user(somchai_id)["display_name"] == "สมชาย ใหม่", str(s))
     wc = server.app.test_client()
     check("A: wichai (สร้างที่ B) เข้าที่ A ได้", wc.post("/api/login", json={"username": "wichai", "password": "pass77"}).status_code == 200)
+    wc.post("/api/logout")
+
+    print("\n── v3.13.0: ผู้จัดการสมาชิกที่ไม่ใช่ Superadmin — งานที่ต้องลายเซ็นผู้ดูแลถูกปฏิเสธทันที (ไม่ค้าง 'รอส่ง') ──")
+    r = c.post("/api/admin/members", json={"username": "mgr", "password": "mgr12345", "display_name": "ผู้จัดการ", "role": "member",
+                                           "permissions": {"manage_members": True}})
+    check("(เตรียม) A: สร้าง mgr ที่มีสิทธิ์จัดการสมาชิก แล้วซิงก์ขึ้นกลาง",
+          r.status_code == 200 and server._members_sync_now("test").get("ok") and "mgr" in hub_members())
+    out = machine_b([
+        {"op": "sync"},
+        {"op": "login", "u": "mgr", "p": "mgr12345"},
+        {"op": "create", "u": "sneak", "p": "sneak123", "as": "mgr_create"},
+        {"op": "update", "u": "wichai", "fields": {"display_name": "แอบแก้"}, "as": "mgr_rename"},
+        {"op": "update", "u": "wichai", "fields": {"display_name": "วิชัย", "password": "pass77b"}, "as": "mgr_pw"},
+        {"op": "delete", "u": "wichai", "as": "mgr_delete"},
+        {"op": "sync", "as": "sync_mgr"}, {"op": "pending", "as": "pending_mgr"}, {"op": "members"},
+    ])
+    check("mgr ที่ B: สร้างสมาชิก/แก้ชื่อคนอื่น/ลบ → 403 need_admin_token (ไม่ใช่ทำในเครื่องแล้วค้างส่ง)",
+          out["mgr_create"][0] == 403 and out["mgr_rename"][0] == 403 and out["mgr_delete"][0] == 403
+          and out["mgr_create"][1].get("need_admin_token") is True, f"{out['mgr_create']} {out['mgr_rename']} {out['mgr_delete']}")
+    mb = {m["username"]: m for m in out["members"]}
+    check("B: ไม่มี sneak · ชื่อ wichai ไม่ถูกแก้ในเครื่อง", "sneak" not in mb and mb["wichai"]["display_name"] == "วิชัย", str(mb.get("wichai")))
+    check("mgr ตั้งรหัสผ่านใหม่ให้สมาชิกธรรมดาได้ (ฟอร์มส่งชื่อเดิมมาด้วยก็ไม่นับเป็นการแก้) → ขึ้นกลางได้ ไม่ค้าง",
+          out["mgr_pw"][0] == 200 and out["sync_mgr"]["ok"] and not out["sync_mgr"]["rejected"] and out["pending_mgr"] == 0, str(out["mgr_pw"]))
+    check("กลาง: ไม่มี sneak", "sneak" not in hub_members())
+    server._members_sync_now("test")
+    wc = server.app.test_client()
+    check("A: wichai เข้าด้วยรหัสใหม่ที่ mgr ตั้งให้ได้",
+          wc.post("/api/login", json={"username": "wichai", "password": "pass77b"}).status_code == 200)
     wc.post("/api/logout")
 
     print("\n── ล็อกอินไม่ผ่านแล้วซิงก์อัตโนมัติ ──")
@@ -298,23 +322,37 @@ def main():
     r = admin.post("/api/hub/members/sync")
     check("ปุ่มซิงก์เดี๋ยวนี้ → ok + สรุป", r.status_code == 200 and r.get_json().get("ok") is True and "summary" in r.get_json(), r.get_data(as_text=True)[:160])
     hs = admin.get("/api/hub/state").get_json()
-    check("หน้าตั้งค่าเห็นผลซิงก์ · รายการฟิลด์ที่ส่ง (มี rev) · เครื่องนี้มีรหัสผู้ดูแล (ไม่ส่งค่าจริงกลับมา)",
+    check("หน้าตั้งค่าเห็นผลซิงก์ · รายการฟิลด์ที่ส่ง (มี rev) · บัญชีนี้ผูก+ใช้สิทธิ์ผู้ดูแลอยู่ (ไม่ส่งค่าจริงกลับมา)",
           hs.get("members", {}).get("ok") is True and hs.get("member_fields") == list(hub.MEMBER_FIELDS) and "rev" in hs["member_fields"]
-          and hs.get("has_admin_token") is True and ADMIN not in json.dumps(hs), str(hs)[:200])
-    r = admin.post("/api/hub/config", json={"admin_token": ""})
-    check("ถอดรหัสผู้ดูแลออกจากเครื่อง → has_admin_token=False", r.status_code == 200 and admin.get("/api/hub/state").get_json().get("has_admin_token") is False)
+          and hs.get("has_admin_token") is True and hs.get("admin_bound") is True and hs.get("admin_unlocked") is True
+          and ADMIN not in json.dumps(hs), str(hs)[:200])
+    r = admin.post("/api/hub/config", json={"admin_token": ADMIN})
+    check("v3.13.0: ช่อง 🔑 ประจำเครื่องถูกถอดแล้ว — ส่ง admin_token มาที่ตั้งค่าศูนย์กลาง → 400 ไม่เก็บ",
+          r.status_code == 400 and "hub_admin_token" not in server.auth.load_config())
+    check("v3.13.0: config.json ของ A ไม่มีรหัสผู้ดูแล",
+          ADMIN not in Path(server.config.CONFIG_PATH).read_text(encoding="utf-8"))
+    other = server.app.test_client()
+    other.post("/api/login", json={"username": "admin1", "password": "secret9"})
+    other.post("/api/logout")
+    r = admin.put(f"/api/admin/members/{somchai_id}", json={"display_name": "ชื่อ A2"})
+    check("v3.13.0: Superadmin ออกจากระบบ (ใบไหนก็ตาม) → สิทธิ์ผู้ดูแลที่ถอดไว้หายจากเครื่อง · ใบที่ยังเปิดอยู่ต้องยืนยันรหัสผ่านก่อนแก้ (403 need_password) ไม่แก้ค้าง",
+          r.status_code == 403 and r.get_json().get("need_password") is True and db.get_user(somchai_id)["display_name"] == "ชื่อจาก A"
+          and admin.get("/api/hub/state").get_json().get("has_admin_token") is False, str(r.get_json()))
+    r = admin.post("/api/auth/confirm-password", json={"password": "wrong-pass"})
+    check("ยืนยันรหัสผิด → 400 (ไม่ใช่ 401 ที่ทำให้หน้าจอเด้งออกจากระบบ)", r.status_code == 400)
+    r = admin.post("/api/auth/confirm-password", json={"password": "secret9"})
+    check("ยืนยันรหัสผ่านถูก → ถอดซองได้อีกครั้ง (admin=unlocked)", r.status_code == 200 and r.get_json().get("admin") == "unlocked", str(r.get_json()))
     r = admin.put(f"/api/admin/members/{somchai_id}", json={"display_name": "ชื่อ A2"})
     res = server._members_sync_now("test")
-    check("A ไม่มีรหัสผู้ดูแลแล้ว → แก้ชื่อค้างส่ง + คำอธิบาย", res.get("rejected") == [{"username": "somchai", "reason": "auth"}]
-          and server._members_last["pending"] == 1 and "รหัสผู้ดูแล" in server._members_last["hint"], str(server._members_last))
-    r = admin.post("/api/hub/config", json={"admin_token": ADMIN})
-    res = server._members_sync_now("test")
-    check("ใส่รหัสผู้ดูแลกลับ → รายการค้างขึ้นกลาง", r.status_code == 200 and res.get("ok") and not res.get("rejected")
+    check("แก้ชื่อหลังยืนยันรหัส → ขึ้นกลางทันที ไม่ค้าง", r.status_code == 200 and res.get("ok") and not res.get("rejected")
           and server._members_last["pending"] == 0 and hub_members()["somchai"]["display_name"] == "ชื่อ A2")
     mc = server.app.test_client()
     mc.post("/api/login", json={"username": "somchai", "password": "newpass6"})
     check("สมาชิกธรรมดาเรียกซิงก์ไม่ได้ (403)", mc.post("/api/hub/members/sync").status_code == 403)
-    check("สมาชิกธรรมดาใส่รหัสผู้ดูแลไม่ได้ (403)", mc.post("/api/hub/config", json={"admin_token": "x"}).status_code == 403)
+    check("สมาชิกธรรมดาผูกสิทธิ์ผู้ดูแลไม่ได้ (403)", mc.post("/api/hub/admin/bind", json={"admin_token": "x", "password": "newpass6"}).status_code == 403)
+    check("v3.13.0: สมาชิกเข้าระบบพร้อมกัน ไม่ทำให้สิทธิ์ของ Superadmin หลุด และใช้แทนไม่ได้",
+          admin.get("/api/hub/state").get_json().get("has_admin_token") is True
+          and mc.post("/api/admin/teams", json={"name": "x", "member_ids": []}).status_code == 403)
 
     print("\n── ความทนทานของ apply_remote_members ──")
     s = db.apply_remote_members([{"username": "nohash", "role": "member", "rev": 1},
@@ -334,11 +372,14 @@ def main():
 
     print("\n── หน้าจอ ──")
     html = (APP / "frontend" / "index.html").read_text(encoding="utf-8")
-    check("หน้าตั้งค่ามีโหมด 'เครื่องแรก/เครื่องเพิ่มเติม' + ฟอร์มเข้าร่วม + ช่องรหัสผู้ดูแลตอนสมัคร",
-          all(k in html for k in ('id="setupModeBar"', 'id="authJoinForm"', 'id="joinHubCode"', "/api/setup/join", 'id="suHubAdmin"', "hub_admin_token")))
+    check("หน้าตั้งค่ามีโหมด 'เครื่องแรก/เครื่องเพิ่มเติม' + ฟอร์มเข้าร่วม · v3.13.0 ไม่มีช่อง 🔑 ตอนสมัครแล้ว",
+          all(k in html for k in ('id="setupModeBar"', 'id="authJoinForm"', 'id="joinHubCode"', "/api/setup/join"))
+          and 'id="suHubAdmin"' not in html and "hub_admin_token" not in html)
     check("หน้าสมาชิกมีแถบสถานะซิงก์ + ปุ่มซิงก์เดี๋ยวนี้ + แสดงรายการรอส่ง",
           all(k in html for k in ('id="memberSyncBar"', 'id="btnMemberSync"', "/api/hub/members/state", "/api/hub/members/sync", "รอส่ง")))
-    check("หน้าตั้งค่าศูนย์กลางมีช่องรหัสผู้ดูแล + ปุ่มถอด", all(k in html for k in ('id="hubAdminToken"', 'id="btnHubAdminClear"', "admin_token")))
+    check("v3.13.0: หน้าตั้งค่าศูนย์กลางไม่มีช่อง 🔑/ปุ่มถอดประจำเครื่อง — มีสถานะ+ฟอร์มผูกสิทธิ์กับบัญชี Superadmin",
+          all(k in html for k in ('id="hubAdminBindForm"', 'id="btnHubAdminBind"', "/api/hub/admin/bind", 'id="btnHubAdminUnlock"'))
+          and 'id="hubAdminToken"' not in html and 'id="btnHubAdminClear"' not in html)
     gas = (HERE.parent / "tools" / "hub_gas.js").read_text(encoding="utf-8")
     check("hub_gas.js มีชีต members · ADMIN_TOKEN · rev · กติกา last_admin/conflict/auth · คำเตือนวิธี Deploy",
           all(k in gas for k in ("MEMBERS_SHEET", "_syncMembers", "ADMIN_TOKEN", "'rev'", "last_admin", "conflict", "'auth'", "New version")))

@@ -219,12 +219,12 @@ def main():
     r = c.post(f"/api/files/results/{rid1}/drive", json={})
     check("ส่งไฟล์ตอนศูนย์กลางยังปิดรับ → ศูนย์กลางปัดตก (บอกวิธีเปิด)",
           r.status_code == 502 and "ยังไม่เปิดรับ" in r.get_json()["error"], str(r.get_json()))
-    tok_backup = server.auth.load_config().get("hub_admin_token")
-    server.auth.update_config(hub_admin_token="")
+    from _app import drop_hub_admin
+    drop_hub_admin()                    # v3.13.0: Superadmin ยังไม่ได้ใช้สิทธิ์ผู้ดูแลในรอบนี้
     r = c.post("/api/hub/drive", json={"enabled": True, "folder": "ผลงานหน่วย ก"})
-    check("เครื่องไม่มีรหัสผู้ดูแล → ตั้งค่าไม่ได้ (need_admin_token)",
+    check("ยังไม่ได้ใช้สิทธิ์ผู้ดูแล → ตั้งค่าไม่ได้ (need_admin_token)",
           r.status_code == 403 and r.get_json().get("need_admin_token"), str(r.get_json()))
-    server.auth.update_config(hub_admin_token=tok_backup)
+    c.post("/api/auth/confirm-password", json={"password": "secret9"})
     r = c.post("/api/hub/drive", json={"enabled": True, "folder": "ผลงานหน่วย ก"})
     j = r.get_json()
     check("เครื่องผู้จัดการเปิดรับ + ตั้งชื่อโฟลเดอร์ → สำเร็จ พร้อมลิงก์โฟลเดอร์",
@@ -327,10 +327,9 @@ def main():
     check("เครื่องสมาชิก (แคชว่าง) ถามสถานะไดรฟ์ → ได้ 'เปิดรับ' สดจากศูนย์กลาง · ไม่เห็นลิงก์โฟลเดอร์ (รีวิว PR #39)",
           out["dv"][0] == 200 and out["dv"][1]["drive"].get("enabled")
           and "folder_url" not in out["dv"][1]["drive"], str(out["dv"]))
-    out = machine_b([{"op": "set_admin_token", "token": ""},
-                     {"op": "login", "u": "worker1", "p": "pass66"},
+    out = machine_b([{"op": "login", "u": "worker1", "p": "pass66"},
                      {"op": "drive_direct", "set": {"enabled": False}, "as": "ds"}])
-    check("B (ไม่มีรหัสผู้ดูแล) ตั้งค่าไดรฟ์ตรงถึงศูนย์กลาง → ศูนย์กลางปัดตก",
+    check("B (สมาชิกล็อกอิน · ไม่มีใครถือสิทธิ์ผู้ดูแล) ตั้งค่าไดรฟ์ตรงถึงศูนย์กลาง → ศูนย์กลางปัดตก",
           out["ds"].get("ok") is False and "ผู้ดูแล" in out["ds"].get("error", ""), str(out["ds"]))
 
     print("\n── เพดานศูนย์กลาง: โควตารายวัน · ปิดรับแล้วปัดตก ──")

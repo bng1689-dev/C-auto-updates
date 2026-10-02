@@ -2,7 +2,9 @@
 
     python _hub_machine.py <data_dir> <state_file> <token> [<script_admin_token>]
         (คำสั่งเป็น JSON list ทาง stdin · ตอบ JSON ทาง stdout)
-    script_admin_token = ADMIN_TOKEN ที่ฝังในสคริปต์จำลอง (ไม่ใช่ของเครื่องนี้ — เครื่องนี้ใส่ผ่าน op set_admin_token)
+    script_admin_token = ADMIN_TOKEN ที่ฝังในสคริปต์จำลอง
+    v3.13.0: เครื่องไม่มี 🔑 แล้ว — สิทธิ์ผู้ดูแลได้จากการที่ Superadmin (ที่ผูกแล้ว) เข้าสู่ระบบด้วยรหัสผ่านในโปรเซสนี้ (op login)
+    · op legacy_admin_token จำลอง config.json ของรุ่นก่อนที่ยังมี 🔑 (ถูกถอดออกทันทีที่อ่าน → รอผูกตอน Superadmin เข้า)
 
 ไม่ใช่ชุดทดสอบ — run_all ไม่รันไฟล์นี้ตรง ๆ"""
 import json
@@ -78,9 +80,25 @@ for cmd in json.loads(sys.stdin.read() or "[]"):
     elif op == "delete":
         r = c.delete(f"/api/admin/members/{uid_of(cmd['u'])}")
         out[key] = [r.status_code, r.get_json()]
-    elif op == "set_admin_token":                # ใส่/ถอด 'รหัสผู้ดูแลศูนย์กลาง' ของเครื่องนี้
+    elif op == "legacy_admin_token":             # v3.13.0: จำลองเครื่องรุ่นก่อนที่มี 🔑 ใน config.json
         server.auth.update_config(hub_admin_token=str(cmd.get("token") or ""))
+        out[key] = "hub_admin_token" in server.auth.load_config()     # อ่านครั้งแรก = ถอดออกจากไฟล์แล้ว (ต้องเป็น False)
+    elif op == "config_file":                    # v3.13.0: ค่าใน config.json จริงบนดิสก์ (ตรวจว่าไม่มี 🔑)
+        out[key] = json.loads(Path(server.config.CONFIG_PATH).read_text(encoding="utf-8"))
+    elif op == "confirm_pw":
+        r = c.post("/api/auth/confirm-password", json={"password": cmd["p"]})
+        out[key] = [r.status_code, r.get_json()]
+    elif op == "bind":
+        r = c.post("/api/hub/admin/bind", json={"admin_token": cmd.get("token", ""), "password": cmd.get("p", "")})
+        out[key] = [r.status_code, r.get_json()]
+    elif op == "hold":                           # ใครถือสิทธิ์ผู้ดูแลอยู่ในโปรเซสนี้ (ชื่อผู้ใช้) — ไม่คืนค่ารหัส
+        names = sorted((db.get_user(h) or {}).get("username", "") for h in server._admin_holders() if server._admin_token(h))
+        out[key] = names[0] if len(names) == 1 else (names or None)
+    elif op == "drop_hold":                      # จำลองเปิดโปรแกรมใหม่ขณะ session ยังจำไว้ (สิทธิ์ในหน่วยความจำหาย)
+        server._admin_release()
         out[key] = True
+    elif op == "envelope":                       # ซองของบัญชีนี้ในเครื่อง (ว่าง = ยังไม่ผูก)
+        out[key] = db.get_admin_envelope(uid_of(cmd["u"]))
     elif op == "touch":                          # จำลองนาฬิกาเครื่องเพี้ยน — ตั้ง updated_at ของคนนี้เป็นค่าที่กำหนด
         with db.get_conn() as conn:
             conn.execute("UPDATE users SET updated_at=?, sync_dirty=1 WHERE username=?", (cmd["at"], cmd["u"]))
@@ -190,10 +208,10 @@ for cmd in json.loads(sys.stdin.read() or "[]"):
         cfg = server.auth.load_config()
         if cmd.get("set") is not None:
             res = hub.drive_config(cfg.get("hub_url"), cfg.get("hub_token"),
-                                   admin_token=cfg.get("hub_admin_token") or None, set_cfg=cmd["set"])
+                                   admin_token=server._admin_token() or None, set_cfg=cmd["set"])
         else:
             res = hub.drive_config(cfg.get("hub_url"), cfg.get("hub_token"),
-                                   admin_token=cfg.get("hub_admin_token") or None)
+                                   admin_token=server._admin_token() or None)
         out[key] = res
     elif op in ("get", "post", "put", "delete"):  # เรียก API ใดก็ได้ (ใช้เตรียมสถานการณ์)
         r = getattr(c, op)(cmd["path"], json=cmd.get("json")) if op != "get" else c.get(cmd["path"])

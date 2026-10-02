@@ -59,6 +59,8 @@ def main():
     r = admin.post("/api/setup", json={"username": "admin1", "password": "secret9", "password2": "secret9",
                                        "display_name": "Admin", "hub_code": code})
     check("สมัครพร้อมรหัสเชื่อมต่อ → ok + hub_connected", r.status_code == 200 and r.get_json().get("hub_connected") is True)
+    from _app import drop_hub_admin, grant_hub_admin
+    grant_hub_admin("admin1", "secret9", "test-admin-token-xyz")   # v3.13.0: Superadmin ใช้สิทธิ์ผู้ดูแลศูนย์กลาง (แทน 🔑 ของเครื่อง)
     cfg = server.auth.load_config()
     check("config ถูกตั้ง: url/token/enabled/1 นาที", cfg.get("hub_url", "").endswith("/exec") and cfg.get("hub_token") == "secret-token-123"
           and cfg.get("hub_enabled") is True and int(cfg.get("hub_interval_min")) == 1)
@@ -107,11 +109,12 @@ def main():
           and r.get_json().get("need_grant") is True, r.get_data(as_text=True)[:120])
     server.urllib.request.urlopen = _orig_open
 
-    # v3.9.1: เชื่อมศูนย์กลางแล้ว การจัดทีมต้องทำจากเครื่องที่มีรหัสผู้ดูแล — เครื่องนี้ยังไม่มี → 403 ก่อน ใส่แล้วจึงสร้างได้
-    check("v3.9.1: เครื่องที่เชื่อมศูนย์กลางแต่ไม่มีรหัสผู้ดูแล → สร้างทีมไม่ได้ (403 need_admin_token)",
-          (lambda r: r.status_code == 403 and r.get_json().get("need_admin_token") is True)(
+    # v3.9.1: เชื่อมศูนย์กลางแล้ว การจัดทีมต้องเป็นผู้จัดการ — v3.13.0: บัญชี Superadmin ที่ผูกสิทธิ์ผู้ดูแลแล้ว (ไม่ใช่ 🔑 ของเครื่อง)
+    drop_hub_admin()
+    check("v3.9.1/v3.13.0: Superadmin ที่ยังไม่ได้ใช้สิทธิ์ผู้ดูแลในรอบนี้ → สร้างทีมไม่ได้ (403 need_admin_token + ขอรหัสผ่าน)",
+          (lambda r: r.status_code == 403 and r.get_json().get("need_admin_token") is True and r.get_json().get("need_password") is True)(
               admin.post("/api/admin/teams", json={"name": "ทีม A", "member_ids": []})))
-    server.auth.update_config(hub_admin_token="test-admin-token-xyz")
+    grant_hub_admin("admin1", "secret9", "test-admin-token-xyz")
     admin.post("/api/admin/teams", json={"name": "ทีม A", "member_ids": [users["admin1"], users["somchai"]]})
     admin.post("/api/admin/teams", json={"name": "ทีม B", "member_ids": [users["wichai"]]})
     seed(users["admin1"], 4); seed(users["somchai"], 2, 1); seed(users["wichai"], 9)
