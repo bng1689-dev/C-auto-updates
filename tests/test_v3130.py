@@ -217,9 +217,9 @@ def main():
     db.change_user_password(uid1, "third999")           # จำลองรหัสถูกเปลี่ยนจากเครื่องรุ่นเก่า (ไม่เข้าซองใหม่)
     r = c.post("/api/login", json={"username": "admin1", "password": "third999"})
     r2 = c.post("/api/admin/teams", json={"name": "ทีม X", "member_ids": []})
-    check("เข้าได้ แต่ซองเดิมเปิดไม่ได้ → งานผู้ดูแลตอบ need_bind (ไม่ใช่ need_password ซ้ำ ๆ)",
+    check("เข้าได้ แต่ซองเดิมเปิดไม่ได้ → งานผู้ดูแลตอบ need_bind (ไม่ใช่ need_password ซ้ำ ๆ) · /api/me admin_stale=True",
           r.status_code == 200 and r2.status_code == 403 and r2.get_json().get("need_bind") is True
-          and not r2.get_json().get("need_password"), str(r2.get_json()))
+          and not r2.get_json().get("need_password") and c.get("/api/me").get_json().get("admin_stale") is True, str(r2.get_json()))
     r = c.post("/api/hub/admin/bind", json={"admin_token": ADMIN, "password": "third999"})
     check("ผูกใหม่ด้วย ADMIN_TOKEN + รหัสปัจจุบัน → ใช้ได้อีกครั้ง",
           r.status_code == 200 and c.post("/api/admin/teams", json={"name": "ทีม X", "member_ids": []}).status_code == 200, str(r.get_json()))
@@ -241,6 +241,82 @@ def main():
     print("\n── ออกจากระบบ = สิทธิ์ในเครื่องหายไป ──")
     c.post("/api/logout")
     check("หลัง Superadmin ออกจากระบบ ไม่มีใครถือสิทธิ์ผู้ดูแลในเครื่อง (ซิงก์เบื้องหลังเซ็นไม่ได้)", server._admin_token() == "")
+
+    print("\n── รีวิว: การแก้ที่ไม่ได้ทำโดยผู้ถือสิทธิ์ ต้องไม่ถูกเซ็นทีหลัง ──")
+    c.post("/api/login", json={"username": "admin1", "password": "third999"})
+    server._members_sync_now("test")
+    somchai = db.get_user_by_username("somchai")
+    with db.signing(False):                         # จำลองการแก้ค้างจากรุ่นก่อน/ผู้จัดการ (ไม่ลงนาม)
+        db.update_user(somchai["id"], display_name="แอบแก้ชื่อ", rate_per_name=99)
+    check("(เตรียม) แถวค้างส่งที่ไม่ลงนาม: sync_signed=0", db.get_user(somchai["id"])["sync_signed"] == 0
+          and db.get_user(somchai["id"])["sync_dirty"] == 1)
+    res = server._members_sync_now("test")
+    hm = hub_members()
+    check("Superadmin ถือสิทธิ์อยู่ในเครื่องเดียวกัน → แถวนั้นไม่ถูกเซ็น (ส่งแบบไม่เซ็น ถูกปัดตก) → ของกลางทับ ไม่ค้าง",
+          hm["somchai"]["display_name"] == "สมชาย" and db.get_user(somchai["id"])["display_name"] == "สมชาย"
+          and db.get_user(somchai["id"])["sync_dirty"] == 0 and "somchai" in (res.get("summary") or {}).get("reverted", []),
+          str(res.get("summary")))
+    r = c.put(f"/api/admin/members/{somchai['id']}", json={"display_name": "สมชาย ใจดี"})
+    res = server._members_sync_now("test")
+    check("การแก้ของ Superadmin ผู้ถือสิทธิ์ (sync_signed=1) → เซ็นแล้วขึ้นกลาง", r.status_code == 200
+          and hub_members()["somchai"]["display_name"] == "สมชาย ใจดี" and res.get("admin") is True, str(res.get("rejected")))
+    r = c.put(f"/api/admin/members/{somchai['id']}", json={"display_name": None})
+    check("ชื่อที่แสดง null → บันทึกเป็นค่าว่าง (ไม่ใช่ข้อความ 'None')", r.status_code == 200
+          and db.get_user(somchai["id"])["display_name"] == "")
+    server._members_sync_now("test")
+    print("\n── รีวิว: ปิดศูนย์กลางชั่วคราว → ผู้จัดการแก้ → เปิดกลับ: ไม่ถูกเซ็น ──")
+    r = c.post("/api/admin/members", json={"username": "mgr2", "password": "mgr22222", "display_name": "ผู้จัดการ 2",
+                                           "role": "member", "permissions": {"manage_members": True}})
+    server._members_sync_now("test")
+    auth.update_config(hub_enabled=False)
+    mg = server.app.test_client()
+    mg.post("/api/login", json={"username": "mgr2", "password": "mgr22222"})
+    r = mg.post("/api/admin/members", json={"username": "offhub", "password": "offhub12", "display_name": "นอกศูนย์"})
+    check("(เตรียม) ศูนย์กลางปิด → ผู้จัดการสร้างสมาชิกในเครื่องได้ แต่จดว่า 'ไม่ลงนาม'",
+          r.status_code == 200 and db.get_user_by_username("offhub")["sync_signed"] == 0, str(r.get_json()))
+    auth.update_config(hub_enabled=True)
+    res = server._members_sync_now("test")
+    check("เปิดศูนย์กลางกลับ + Superadmin ถือสิทธิ์อยู่ → offhub ไม่ถูกเซ็นขึ้นกลาง (ค้างรอ Superadmin ยืนยันเอง)",
+          "offhub" not in hub_members() and db.get_user_by_username("offhub")["sync_dirty"] == 1, str(res.get("rejected")))
+    r = c.put(f"/api/admin/members/{db.get_user_by_username('offhub')['id']}", json={"display_name": "นอกศูนย์ (ยืนยันแล้ว)"})
+    server._members_sync_now("test")
+    check("Superadmin แก้แถวนั้นเอง (ยืนยัน) → ลงนามแล้วขึ้นกลาง", r.status_code == 200 and "offhub" in hub_members())
+    mg.post("/api/logout")
+
+    print("\n── รีวิว: ขอบเขตอื่น ๆ ──")
+    r = c.post("/api/hub/admin/bind", json={"admin_token": "x" * 400, "password": "third999"})
+    check("ADMIN_TOKEN ยาวผิดปกติ → ปฏิเสธ (ไม่ล้ม 500)", r.status_code == 403 and "ยาว" in r.get_json().get("error", ""), str(r.get_json()))
+    with server._ADMIN_HOLD_LOCK:
+        server._ADMIN_HOLDS[uid1]["seen"] = 0.0
+    check("สิทธิ์ที่ถอดไว้ไม่มีความเคลื่อนไหวเกินกำหนด → ปล่อยทิ้ง (ลืมออกจากระบบ)", server._admin_token() == "")
+    r = c.post("/api/password", json={"current": "third999", "new": "fourth999"})
+    check("Superadmin เปลี่ยนรหัสผ่าน (ถอดซองด้วยรหัสเดิมได้) → สำเร็จ · ซองใหม่ใส่พร้อมรหัสใหม่",
+          r.status_code == 200 and auth.open_admin_key(db.get_admin_envelope(uid1), "fourth999") == ADMIN, str(r.get_json()))
+    exp = {m["username"]: m for m in db.export_members(signed=True)}
+    check("แถวที่ค้างส่งมีทั้งแฮชใหม่และซองใหม่ในก้อนเดียว (ลงนามได้)",
+          "admin1" in exp and auth.open_admin_key(json.loads(exp["admin1"]["permissions"])["_hub_admin"], "fourth999") == ADMIN)
+    server._members_sync_now("test")
+    c.post("/api/logout")
+    uid3 = None
+    with db.signing(True):
+        uid3 = db.create_user("admin3", "third333", display_name="แอดมิน 3", role="super_admin")
+    server._members_sync_now("test")
+    a3 = server.app.test_client()
+    a3.post("/api/login", json={"username": "admin3", "password": "third333"})
+    r = a3.post("/api/password", json={"current": "third333", "new": "third444"})
+    check("Superadmin ที่ยังไม่ผูก เปลี่ยนรหัสผ่านขณะเชื่อมศูนย์กลาง → 403 need_bind (ไม่เปลี่ยนในเครื่องแล้วค้าง)",
+          r.status_code == 403 and r.get_json().get("need_bind") is True and db.verify_user("admin3", "third333"), str(r.get_json()))
+    auth._LEGACY_ADMIN_TOKEN[0] = ADMIN             # จำลองรหัสเดิมของเครื่องที่ยังรอผูก
+    a3.post("/api/logout")
+    a3.post("/api/login", json={"username": "admin3", "password": "third333"})
+    check("มี Superadmin หลายคน → ไม่ผูกรหัสเดิมของเครื่องให้ใครอัตโนมัติ (ต้องผูกเองที่ Setting)",
+          not db.get_admin_envelope(uid3) and auth.take_legacy_admin_token(peek=True) == ADMIN)
+    auth.take_legacy_admin_token()
+    st = c.post("/api/login", json={"username": "admin1", "password": "fourth999"})
+    me = c.get("/api/me").get_json()
+    check("/api/me: admin_stale=False เมื่อเปิดซองได้", st.status_code == 200 and me.get("admin_stale") is False and me.get("central_manager") is True)
+    a3.post("/api/logout")
+    c.post("/api/logout")
 
     print("\n── หน้าจอ ──")
     html = (APP / "frontend" / "index.html").read_text(encoding="utf-8")
