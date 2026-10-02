@@ -213,8 +213,11 @@ def main():
           and "_hub_admin" not in (db.get_user(uid2)["permissions"] or ""), str(r.get_json()))
 
     print("\n── ซองเปิดไม่ได้ (รหัสผ่านถูกตั้งจากทางที่ไม่ได้เข้าซองใหม่) → บอกให้ผูกใหม่ ไม่วนขอรหัสผ่าน ──")
-    c.post("/api/logout")
-    db.change_user_password(uid1, "third999")           # จำลองรหัสถูกเปลี่ยนจากเครื่องรุ่นเก่า (ไม่เข้าซองใหม่)
+    held = server._admin_token(uid1) == ADMIN
+    # จำลองรหัสถูกเปลี่ยนจากเครื่องรุ่นเก่า (ไม่เข้าซองใหม่ — ซองในบัญชียังเป็นใบเดิม) ขณะ admin1 ยังถือสิทธิ์อยู่ที่เครื่องนี้
+    db.change_user_password(uid1, "third999")
+    check("รหัสผ่านเปลี่ยน (แม้ซองยังเป็นใบเดิม) → สิทธิ์ที่ถอดไว้ด้วยรหัสเดิมถูกปล่อยทันที (รีวิว Codex PR #41)",
+          held and server._admin_token(uid1) == "" and server._admin_token() == "")
     r = c.post("/api/login", json={"username": "admin1", "password": "third999"})
     r2 = c.post("/api/admin/teams", json={"name": "ทีม X", "member_ids": []})
     check("เข้าได้ แต่ซองเดิมเปิดไม่ได้ → งานผู้ดูแลตอบ need_bind (ไม่ใช่ need_password ซ้ำ ๆ) · /api/me admin_stale=True",
