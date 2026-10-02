@@ -213,8 +213,11 @@ def main():
           and "_hub_admin" not in (db.get_user(uid2)["permissions"] or ""), str(r.get_json()))
 
     print("\n── ซองเปิดไม่ได้ (รหัสผ่านถูกตั้งจากทางที่ไม่ได้เข้าซองใหม่) → บอกให้ผูกใหม่ ไม่วนขอรหัสผ่าน ──")
-    c.post("/api/logout")
-    db.change_user_password(uid1, "third999")           # จำลองรหัสถูกเปลี่ยนจากเครื่องรุ่นเก่า (ไม่เข้าซองใหม่)
+    held = server._admin_token(uid1) == ADMIN
+    # จำลองรหัสถูกเปลี่ยนจากเครื่องรุ่นเก่า (ไม่เข้าซองใหม่ — ซองในบัญชียังเป็นใบเดิม) ขณะ admin1 ยังถือสิทธิ์อยู่ที่เครื่องนี้
+    db.change_user_password(uid1, "third999")
+    check("รหัสผ่านเปลี่ยน (แม้ซองยังเป็นใบเดิม) → สิทธิ์ที่ถอดไว้ด้วยรหัสเดิมถูกปล่อยทันที (รีวิว Codex PR #41)",
+          held and server._admin_token(uid1) == "" and server._admin_token() == "")
     r = c.post("/api/login", json={"username": "admin1", "password": "third999"})
     r2 = c.post("/api/admin/teams", json={"name": "ทีม X", "member_ids": []})
     check("เข้าได้ แต่ซองเดิมเปิดไม่ได้ → งานผู้ดูแลตอบ need_bind (ไม่ใช่ need_password ซ้ำ ๆ) · /api/me admin_stale=True",
@@ -315,6 +318,23 @@ def main():
     st = c.post("/api/login", json={"username": "admin1", "password": "fourth999"})
     me = c.get("/api/me").get_json()
     check("/api/me: admin_stale=False เมื่อเปิดซองได้", st.status_code == 200 and me.get("admin_stale") is False and me.get("central_manager") is True)
+    check("เปลี่ยนรหัสผ่านของตัวเองแล้วยังถือสิทธิ์ต่อได้ (จำรหัสใหม่)",
+          c.post("/api/password", json={"current": "fourth999", "new": "fifth999"}).status_code == 200
+          and server._admin_token(uid1) == ADMIN)
+    real_change = db.change_user_password
+
+    def _remote_lands(uid, pw, admin_envelope=None):
+        out = real_change(uid, pw, admin_envelope=admin_envelope)
+        with db.signing(False):             # จังหวะเดียวกัน: ซิงก์เบื้องหลังนำรหัสผ่านที่ถูกเปลี่ยนจากเครื่องอื่นมาทับ
+            real_change(uid, "remote999")
+        return out
+    db.change_user_password = _remote_lands
+    try:
+        r = c.post("/api/password", json={"current": "fifth999", "new": "sixth999"})
+    finally:
+        db.change_user_password = real_change
+    check("รหัสผ่านจากเครื่องอื่นมาทับระหว่างเปลี่ยนรหัสเอง → สิทธิ์ไม่ถูกผูกกับรหัสของคนอื่น (ปล่อยทิ้ง) (รีวิว Codex PR #42)",
+          r.status_code == 200 and server._admin_token(uid1) == "", str(r.get_json()))
     a3.post("/api/logout")
     c.post("/api/logout")
 
