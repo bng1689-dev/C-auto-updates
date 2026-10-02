@@ -2,9 +2,11 @@
 
 จำลองพฤติกรรมที่ engine ต้องรับมือจริง:
   • หน้าเข้าสู่ระบบ (มีช่องรหัสผ่าน) → เข้าสู่ระบบแล้วค่อยเด้งไปหน้าค้นหา
-  • (v3.12.0) หลังเข้าสู่ระบบ เว็บถามรูปแบบหน้าจอ: ติ๊ก 'ใช้โหมดหน้าจอเดิม' + กด 'ยืนยัน'
-    แล้วต้องเลือกหมวด 'บุคคล' (มี 'นิติบุคคล' เป็นตัวหลอก) ก่อนถึงหน้าค้น — การเลือกโหมดจำใน
-    localStorage (ถามครั้งเดียว) แต่หมวดต้องเลือกใหม่ทุกครั้งที่โหลดหน้า (จำลองเว็บจริง + ทางกู้หลังรีโหลด)
+  • (v3.12.1 — ตามภาพหน้าจอจริงของเจ้าของโปรเจกต์) หลังเข้าสู่ระบบเว็บเปิด 'โหมดหน้าจอใหม่' (#/iv/search/main)
+    แถบหัวมีสวิตช์ '[ โหมดหน้าจอ (เดิม/ใหม่) ] :' (เปิด = ใหม่) · กดแล้วมีกล่องยืนยัน (เด้งช้าเล็กน้อย และสวิตช์
+    เด้งกลับจนกว่าจะกดยืนยัน — กรณียากสุดของตัวอัตโนมัติ) → หน้าแรกโหมดเดิม 'ระบบสืบค้น' (#/bda/home) มีการ์ด
+    'บุคคล' (ทะเบียนราษฎร หมายจับ) → หน้าสืบค้นบุคคล · โหมดใหม่ก็มีช่อง #inputPid (กับดัก: ห้ามค้นในโหมดใหม่)
+    · เปิด URL โหมดเดิมขณะอยู่โหมดใหม่ → ถูกพากลับ #/iv/search/main · โหมดจำใน localStorage
   • กล่อง 'มีอะไรใหม่' ครอบทั้งหน้า (หัวข้อบนสุด ปุ่ม 'เข้าใจแล้ว' ล่างสุด คนละกิ่ง)
   • หน้าค้นหาเป็น SPA URL เดิม — ผลของคนก่อนหน้าค้างบนหน้าจนกว่าคำตอบใหม่จะมา (หน่วงได้)
   • ป๊อบอัพระบุเหตุผล + ปุ่ม 'ยืนยันค้นหา' · ตาราง → หน้ารายละเอียด → 'ย้อนกลับ'
@@ -19,7 +21,9 @@ from urllib.parse import urlparse, parse_qs
 STATE = {
     "logged_in": False,
     "announce": True,
-    "classic_prompt": True,    # v3.12.0: ถามรูปแบบหน้าจอหลังเข้าสู่ระบบ + ต้องเลือกหมวด 'บุคคล'
+    "new_ui": True,            # v3.12.1: เข้าสู่ระบบแล้วเริ่มที่โหมดหน้าจอใหม่ (สวิตช์บนแถบหัวเปิดอยู่)
+    "mode_confirm": True,      # กดสวิตช์แล้วมีกล่อง 'ยืนยัน' (สวิตช์เด้งกลับจนกว่าจะยืนยัน)
+    "mode_confirm_delay": 300, # มิลลิวินาทีก่อนกล่องยืนยันโผล่ (จำลองแอนิเมชันของเว็บ)
     "delay": 0.0,              # หน่วงคำตอบการค้น (วินาที)
     "fail_http": {},           # pid -> จำนวนครั้งแรกที่ตอบ 500
     "stuck": [],               # pid ที่ป๊อบอัพยืนยันค้างครั้งแรก
@@ -38,11 +42,18 @@ body{font-family:sans-serif;margin:0} .bar{padding:8px;background:#123;color:#ff
 .color-yellow-hard{display:inline-block;background:#fc0;padding:8px 20px;cursor:pointer}
 .popup{position:fixed;left:30%;top:30%;background:#fff;border:2px solid #333;padding:16px;z-index:40}
 table{border-collapse:collapse} td,th{border:1px solid #999;padding:4px}
+.visually-hidden{position:absolute!important;width:1px;height:1px;margin:-1px;padding:0;overflow:hidden;clip:rect(0 0 0 0);border:0;white-space:nowrap}
+.toggle-label{display:inline-block;vertical-align:middle;cursor:pointer}
+.toggle{width:44px;height:22px;border-radius:11px;background:#999;position:relative;display:inline-block}
+.toggle.checked{background:#3b82f6}.toggle-switcher{position:absolute;top:2px;left:2px;width:18px;height:18px;border-radius:9px;background:#fff}
+.toggle.checked .toggle-switcher{left:24px}
+.card{display:inline-block;border:1px solid #ccd;border-radius:10px;padding:16px;margin:6px;cursor:pointer;width:150px;text-align:center}
+.ct{font-weight:bold}.cs{font-size:11px;color:#667}.tab{display:inline-block;padding:6px 10px;border:1px solid #ccd}
 </style></head><body>
-<div class="bar">ระบบสืบค้น (จำลอง) · <span id="who"></span></div>
+<div class="bar"><div>ระบบสืบค้น (จำลอง)</div><div id="modeBox"></div><div id="who"></div></div>
 <div id="app"></div>
 <script>
-const S = {results:null, count:null, pid:"", cfg:{stuck:[]}, stuckUsed:{}, detail:null, person:false};
+const S = {results:null, count:null, pid:"", cfg:{stuck:[]}, stuckUsed:{}, detail:null};
 async function cfg(){ try{ S.cfg = await (await fetch('/api/config')).json(); }catch(e){} }
 function esc(s){return (s??'').toString().replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
 async function session(){ try{ return (await (await fetch('/api/session')).json()).logged_in; }catch(e){ return false; } }
@@ -50,31 +61,61 @@ function renderLogin(){
   document.getElementById('who').textContent='';
   app.innerHTML = '<h3>เข้าสู่ระบบ</h3><input placeholder="ชื่อผู้ใช้"> <input type="password" placeholder="รหัสผ่าน"> <button>เข้าสู่ระบบ</button>';
 }
-function renderClassicPrompt(){
-  // v3.12.0: กล่องเลือกรูปแบบหลังเข้าสู่ระบบ — ต้อง 'ติ๊กก่อน' ปุ่มยืนยันจึงทำงาน (เหมือนเว็บจริง)
-  document.getElementById('who').textContent='ชื่อ : ร.ต.อ.ทดสอบ ระบบ';
-  app.innerHTML = '<div class="overlay"><div class="box"><div class="head"><b>เลือกรูปแบบการแสดงผล</b></div>'
-    + '<div class="body">ระบบมีหน้าจอรูปแบบใหม่ให้ทดลองใช้<br>'
-    + '<label><input type="checkbox" id="classicChk"> <span>ใช้โหมดหน้าจอเดิม</span></label></div>'
-    + '<div class="foot"><button id="classicCancel">ยกเลิก</button> <button id="classicOk">ยืนยัน</button></div></div></div>';
-  document.getElementById('classicOk').onclick = ()=>{
-    if(!document.getElementById('classicChk').checked) return;   // ไม่ติ๊ก = ปุ่มไม่ทำงาน
-    localStorage.setItem('classicMode','1'); route();
-  };
-  document.getElementById('classicCancel').onclick = ()=>{};      // โหมดใหม่ไม่จำลอง — ต้องติ๊ก+ยืนยันเท่านั้น
+function uiMode(){ if(!S.cfg.new_ui) return 'classic'; return localStorage.getItem('uiMode') || 'new'; }
+function setMode(m){
+  localStorage.setItem('uiMode', m);
+  const target = m==='classic' ? '#/bda/home' : '#/iv/search/main';
+  if(location.hash===target) route(); else location.hash = target;
 }
-function renderCategory(){
-  // v3.12.0: โหมดหน้าจอเดิมให้เลือกหมวดก่อน — 'นิติบุคคล' อยู่ก่อน 'บุคคล' (กันโปรแกรมคลิกคำที่แค่ 'มีคำว่าบุคคล')
+function renderHeader(){
+  // แถบหัวเว็บจริง: '[ โหมดหน้าจอ (เดิม/ใหม่) ] :' + สวิตช์แบบ nb-toggle (input ซ่อน + ตัวสวิตช์ที่มองเห็น)
   document.getElementById('who').textContent='ชื่อ : ร.ต.อ.ทดสอบ ระบบ';
-  app.innerHTML = '<h3>เลือกประเภทการค้นหา</h3>'
-    + '<div class="cat"><button data-cat="juristic">นิติบุคคล</button> '
-    + '<button data-cat="vehicle">ยานพาหนะ</button> '
-    + '<button data-cat="person">บุคคล</button> '
-    + '<button data-cat="case">คดี</button></div>';
-  app.querySelectorAll('button[data-cat]').forEach(b=>b.onclick=()=>{
-    if(b.dataset.cat==='person'){ S.person = true; route(); }
+  const box = document.getElementById('modeBox');
+  if(!S.cfg.new_ui){ box.innerHTML=''; return; }
+  const on = uiMode()==='new';
+  box.innerHTML = '<span class="modelab">[ โหมดหน้าจอ (เดิม/ใหม่) ] :</span> '
+    + '<label class="toggle-label"><input type="checkbox" class="native-input visually-hidden" id="modeToggle"'+(on?' checked':'')+'>'
+    + '<div class="toggle'+(on?' checked':'')+'"><span class="toggle-switcher"></span></div></label>';
+  const t = document.getElementById('modeToggle');
+  t.onchange = ()=>{
+    const want = t.checked ? 'new' : 'classic';
+    if(S.cfg.mode_confirm){
+      t.checked = !t.checked;                      // เด้งกลับจนกว่าจะกดยืนยัน
+      setTimeout(()=>showModeConfirm(want), S.cfg.mode_confirm_delay||0);
+    } else setMode(want);
+  };
+}
+function showModeConfirm(want){
+  if(document.getElementById('modeDlg')) return;
+  const d = document.createElement('div'); d.className='overlay'; d.id='modeDlg';
+  d.innerHTML = '<div class="box" role="dialog" aria-modal="true"><div class="head"><b>ยืนยันการเปลี่ยนโหมดหน้าจอ</b></div>'
+    + '<div class="body">ต้องการเปลี่ยนเป็นโหมดหน้าจอ'+(want==='classic'?'เดิม':'ใหม่')+'หรือไม่</div>'
+    + '<div class="foot"><button id="mdCancel">ยกเลิก</button> <button id="mdOk">ยืนยัน</button></div></div>';
+  document.body.appendChild(d);
+  d.querySelector('#mdCancel').onclick = ()=>{ d.remove(); };
+  d.querySelector('#mdOk').onclick = ()=>{ d.remove(); setMode(want); };
+}
+function renderNewUI(){
+  // โหมดใหม่ (#/iv/search/main) — มีแท็บ 'บุคคล' และช่อง #inputPid ด้วย (กับดัก: หน้าตาคล้ายหน้าค้น แต่ไม่ใช่)
+  app.innerHTML = '<div class="iv"><div class="left"><b>เงื่อนไขการค้นหา</b><br>'
+    + '<input placeholder="ระบุเลขบัตรประชาชน"> <button>ค้นหาบุคคล</button></div>'
+    + '<div class="tabs"><span class="tab">บุคคล</span><span class="tab">ยานพาหนะ</span><span class="tab">ที่ดิน</span>'
+    + '<span class="tab">CRIMES</span></div>'
+    + '<div class="sec"><b>บุคคล</b><br>ชื่อ: <input> เลขบัตรประชาชน: <input id="inputPid"></div></div>';
+}
+function renderHome(){
+  // หน้าแรกโหมดเดิม 'ระบบสืบค้น' — การ์ด 'บุคคล' (ทะเบียนราษฎร หมายจับ) · เมนูซ้าย 'ระบบสืบค้นบุคคล' ไม่ใช่คำเป๊ะ
+  app.innerHTML = '<div class="side"><div>หน้าหลัก</div><div>ระบบสืบค้นบุคคล</div><div>ระบบสืบค้นยานพาหนะ</div></div>'
+    + '<h2>ระบบสืบค้น</h2><div class="cards">'
+    + '<div class="card" data-go="person"><div class="ct">บุคคล</div><div class="cs">ทะเบียนราษฎร หมายจับ</div></div>'
+    + '<div class="card" data-go="vehicle"><div class="ct">ยานพาหนะ</div><div class="cs">กรมขนส่งทางบก รถแจ้งหาย</div></div>'
+    + '<div class="card" data-go="case"><div class="ct">ข้อมูลคดี</div><div class="cs">รายละเอียดข้อมูลคดีอาญา</div></div>'
+    + '</div>';
+  app.querySelectorAll('.card').forEach(c=>c.onclick=()=>{
+    location.hash = c.dataset.go==='person' ? '#/bda/search/criteria/person' : '#/bda/other/'+c.dataset.go;
   });
 }
+function renderOther(){ app.innerHTML = '<h3>ระบบสืบค้นอื่น (จำลอง)</h3>'; }
 function renderCriteria(){
   document.getElementById('who').textContent='ชื่อ : ร.ต.อ.ทดสอบ ระบบ';
   let h = '<div><input id="inputPid" placeholder="เลขบัตรประชาชน" maxlength="13"></div>'
@@ -84,11 +125,10 @@ function renderCriteria(){
   app.innerHTML = h;
   document.getElementById('btnSearch').onclick = openPopup;
   renderResults();
-  if(S.cfg.announce && !localStorage.getItem('ann215') && !document.getElementById('ann')) renderAnnounce();
 }
 function renderAnnounce(){
   const d = document.createElement('div'); d.className='overlay'; d.id='ann';
-  d.innerHTML = '<div class="box"><div class="head"><b>มีอะไรใหม่</b> <span>เวอร์ชัน 2.1.5</span><button class="close" aria-label="close">✕</button></div>'
+  d.innerHTML = '<div class="box" role="dialog" aria-modal="true"><div class="head"><b>มีอะไรใหม่</b> <span>เวอร์ชัน 2.1.5</span><button class="close" aria-label="close">✕</button></div>'
     + '<div class="body">ปรับปรุงหน้าค้นหา ...</div><div class="foot"><button id="annOk">เข้าใจแล้ว</button></div></div>';
   document.body.appendChild(d);
   d.querySelector('#annOk').onclick = ()=>{ localStorage.setItem('ann215','1'); d.remove(); };
@@ -140,11 +180,19 @@ async function route(){
     return;
   }
   if(!(await session())){ location.hash = '#/login'; return; }
-  if(h.includes('detail')){ renderDetail(); return; }
-  // v3.12.0: โหมด/หมวดคั่นก่อนหน้าค้น — โหมดจำใน localStorage · หมวดเลือกใหม่ทุกครั้งที่โหลดหน้า
-  if(S.cfg.classic_prompt && !localStorage.getItem('classicMode')){ renderClassicPrompt(); return; }
-  if(S.cfg.classic_prompt && !S.person){ renderCategory(); return; }
-  renderCriteria();
+  renderHeader();
+  if(uiMode()==='new'){
+    if(!h.includes('/iv/')){ location.hash = '#/iv/search/main'; return; }   // URL โหมดเดิมถูกพากลับโหมดใหม่
+    renderNewUI();
+  } else {
+    if(h.includes('/iv/')){ location.hash = '#/bda/home'; return; }
+    if(h.includes('detail')) renderDetail();
+    else if(h.includes('criteria/person')) renderCriteria();
+    else if(h.includes('/bda/home')) renderHome();
+    else renderOther();
+  }
+  // กล่อง 'มีอะไรใหม่' เด้งทับหน้าแรกหลังเข้าสู่ระบบ (ภาพที่ 1) — ไม่ขึ้นทุกครั้ง: จำว่าอ่านแล้ว
+  if(S.cfg.announce && !localStorage.getItem('ann215') && !document.getElementById('ann')) renderAnnounce();
 }
 window.addEventListener('hashchange', route);
 cfg().then(route);
@@ -178,7 +226,8 @@ class H(BaseHTTPRequestHandler):
             return self._json({"logged_in": STATE["logged_in"]})
         if u.path == "/api/config":
             return self._json({"announce": STATE["announce"], "stuck": STATE["stuck"],
-                               "classic_prompt": STATE["classic_prompt"]})
+                               "new_ui": STATE["new_ui"], "mode_confirm": STATE["mode_confirm"],
+                               "mode_confirm_delay": STATE["mode_confirm_delay"]})
         if u.path == "/api/search":
             pid = (q.get("pid") or [""])[0]
             with LOCK:

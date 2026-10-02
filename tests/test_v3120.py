@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""v3.12.0 — โหมดหน้าจอเดิม+เลือก 'บุคคล' หลังเข้าสู่ระบบ CRIMES · รหัสลบข้อมูล = รหัสผ่านสมาชิกเอง · ซิงก์ทันทีที่เปิดโปรแกรม
+"""v3.12.0/v3.12.1 — โหมดหน้าจอเดิม+เลือก 'บุคคล' หลังเข้าสู่ระบบ CRIMES · รหัสลบข้อมูล = รหัสผ่านสมาชิกเอง · ซิงก์ทันทีที่เปิดโปรแกรม
 
 เจ้าของสั่ง: "เมื่อ login เข้าระบบ Crimes ได้แล้ว ให้ติ๊ก 'ใช้โหมดหน้าจอเดิม' แล้วกดยืนยันหรือตกลง
             เข้าแล้วให้เลือกบุคคล จากนั้นเริ่มทำงานต่อ · รหัสยืนยันลบข้อมูลให้ใช้รหัสเดียวกับที่สมาชิกตั้งเอง
@@ -173,12 +173,15 @@ def main():
            .split("\ndef ")[0].count("_members_sync_or_wait(\"login\")")) == 2)
     server.auth.update_config(hub_enabled=False)
 
-    print("\n── โหมดหน้าจอเดิม + เลือก 'บุคคล' (Chromium + เว็บ CRIMES จำลอง) ──")
+    print("\n── ขั้นตอนหลังเข้าสู่ระบบ CRIMES ตามภาพหน้าจอจริงของเจ้าของ (Chromium + เว็บจำลองแบบเดียวกัน) ──")
     port = free_port()
     mock_crimes.serve(port)
-    mock_crimes.STATE["logged_in"] = True
-    mock_crimes.STATE["announce"] = False          # แยกเรื่อง — กล่องประกาศมีชุดทดสอบของตัวเอง
+    MS = mock_crimes.STATE
+    MS.update(logged_in=True, announce=True, new_ui=True, mode_confirm=True, mode_confirm_delay=300)
     url = f"http://127.0.0.1:{port}/bdasearch/#/bda/search/criteria/person"
+    engine.SEARCH_URL = url
+    engine.set_speed(5)
+    NO_OP = {"ticked": False, "confirm": "", "person": False}
     from playwright.sync_api import sync_playwright
     with sync_playwright() as pw:
         b = pw.chromium.launch(executable_path=CHROME, headless=True,
@@ -186,105 +189,138 @@ def main():
         ctx = b.new_context()
         page = ctx.new_page()
         page.goto(url, wait_until="domcontentloaded")
-        page.wait_for_timeout(700)
-        check("หลังเข้าสู่ระบบ: เว็บถามรูปแบบหน้าจอ (ยังไม่มีช่องเลขบัตร)",
-              page.locator("#classicChk").count() == 1 and page.locator("#inputPid").count() == 0)
+        page.wait_for_timeout(800)
+        check("หลังเข้าสู่ระบบ: เว็บพาไปโหมดใหม่ (#/iv/) แม้เปิด URL โหมดเดิม + มีกล่อง 'มีอะไรใหม่' (ภาพที่ 1-2)",
+              "#/iv/" in page.url and page.locator("#ann").count() == 1, page.url)
+        check("กับดัก: โหมดใหม่ก็มีช่อง #inputPid — is_new_ui ต้องบอกว่าเป็นโหมดใหม่ (ห้ามนับว่าถึงหน้าค้น)",
+              engine._find_id_input_selector(page) is not None and engine.is_new_ui(page))
         notes = []
-        ec = engine.enter_classic_mode(page, note=notes.append)
-        check("ติ๊ก 'ใช้โหมดหน้าจอเดิม' + กดยืนยันให้เอง", ec["ticked"] is True, str(ec))
-        check("เว็บจำโหมดเดิมแล้ว (localStorage)",
-              page.evaluate("() => localStorage.getItem('classicMode')") == "1")
-        for _ in range(3):
-            if page.locator("#inputPid").count():
-                break
-            page.wait_for_timeout(400)
-            ec2 = engine.enter_classic_mode(page, note=notes.append)
-        check("เลือกหมวด 'บุคคล' แล้วถึงหน้าค้น (ช่องเลขบัตรโผล่)",
-              page.locator("#inputPid").count() == 1,
-              page.inner_text("body")[:200])
-        check("เลือกถูกตัว — ไม่ใช่ 'นิติบุคคล' (หมวดบุคคลเท่านั้นที่พาไปหน้าค้น)",
-              page.evaluate("() => S.person === true"))
-        check("รายงานขั้นที่ทำในบันทึกการทำงาน",
-              any("ใช้โหมดหน้าจอเดิม" in m for m in notes) and any("บุคคล" in m for m in notes), str(notes))
-        ec3 = engine.enter_classic_mode(page, note=notes.append)
-        check("ถึงหน้าค้นแล้วเรียกซ้ำ = เงียบ ไม่แตะอะไร", ec3 == {"ticked": False, "person": False}
-              and page.locator("#inputPid").count() == 1, str(ec3))
+        engine._LAST_MODE_CLICK = 0.0
+        r0 = engine.enter_classic_mode(page, note=notes.append)
+        check("กล่อง 'มีอะไรใหม่' ยังเปิด → ยังไม่กดสวิตช์ (ทำตามลำดับ ① ก่อน ②)",
+              r0 == NO_OP and engine.is_new_ui(page), str(r0))
+        check("① ปิด 'มีอะไรใหม่' ด้วยปุ่ม 'เข้าใจแล้ว'",
+              engine.dismiss_announcement(page, note=notes.append) and page.locator("#ann").count() == 0)
+        engine._LAST_MODE_CLICK = 0.0
+        r1 = engine.enter_classic_mode(page, note=notes.append)
+        check("② กดสวิตช์ [โหมดหน้าจอ (เดิม/ใหม่)] + กด 'ยืนยัน' ในกล่องที่เด้งช้า (สวิตช์เด้งกลับจนกว่าจะยืนยัน)",
+              r1["ticked"] and r1["confirm"] == "ยืนยัน", str(r1))
+        check("   เว็บจำโหมดเดิมแล้ว + สวิตช์อยู่ตำแหน่งปิด (สีเทา)",
+              page.evaluate("() => localStorage.getItem('uiMode')") == "classic"
+              and page.evaluate("() => !document.getElementById('modeToggle').checked"))
+        check("③ คลิกการ์ด 'บุคคล' ในหน้า 'ระบบสืบค้น' → หน้าสืบค้นบุคคล (ช่อง placeholder 'เลขบัตรประชาชน')",
+              r1["person"] and "criteria/person" in page.url
+              and page.locator('input[placeholder="เลขบัตรประชาชน"]').count() == 1, f"{r1} {page.url}")
+        check("④ พร้อมค้น: เห็นช่องเลขบัตร และไม่ใช่โหมดใหม่",
+              engine._find_id_input_selector(page) is not None and not engine.is_new_ui(page))
+        check("บันทึกการทำงานบอกครบทุกขั้น (ปิดประกาศ · สวิตช์ · ยืนยัน · บุคคล)",
+              all(any(k in m for m in notes) for k in ("ปิดกล่องประกาศ", "โหมดหน้าจอ", "'ยืนยัน'", "บุคคล")), str(notes))
+        n_before = len(notes)
+        r2 = engine.enter_classic_mode(page, note=notes.append)
+        check("ถึงหน้าค้นแล้วเรียกซ้ำ = เงียบ ไม่แตะอะไร ไม่บันทึกอะไร", r2 == NO_OP and len(notes) == n_before, str(r2))
 
-        # รีโหลดหน้า (จำโหมดแล้ว) → เหลือหน้าเลือกหมวด — ทางกู้ของ search_one_id ต้องผ่านเอง
-        # (goto ไป URL เดิมเป๊ะของ SPA ไม่นับเป็นโหลดใหม่ — ต้อง reload จริง สถานะในหน้า (S.person) จึงหาย)
         page.reload(wait_until="domcontentloaded")
-        page.wait_for_timeout(700)
-        check("รีโหลด: ข้ามกล่องถามโหมด (จำไว้แล้ว) เหลือหน้าเลือกหมวด",
-              page.locator("#classicChk").count() == 0 and page.locator("#inputPid").count() == 0
-              and "เลือกประเภทการค้นหา" in page.inner_text("body"))
-        ec4 = engine.enter_classic_mode(page)
-        page.wait_for_timeout(300)
-        check("หลังรีโหลด: คลิก 'บุคคล' รอบเดียวถึงหน้าค้น",
-              ec4["person"] is True and page.locator("#inputPid").count() == 1, str(ec4))
+        page.wait_for_timeout(600)
+        check("รีโหลดหน้า: อยู่โหมดเดิมต่อ ไม่มีกล่อง 'มีอะไรใหม่' ซ้ำ (ภาพที่ 1 ไม่ขึ้นทุกครั้ง)",
+              not engine.is_new_ui(page) and page.locator("#ann").count() == 0
+              and engine.dismiss_announcement(page) is False)
 
-        # เว็บรุ่นเดิม (ไม่มีหน้าคั่น) → ฟังก์ชันต้องเงียบสนิท
-        mock_crimes.STATE["classic_prompt"] = False
-        ctx2 = b.new_context()
-        p2 = ctx2.new_page()
-        p2.goto(url, wait_until="domcontentloaded")
-        p2.wait_for_timeout(700)
-        check("เว็บรุ่นเดิม: ถึงหน้าค้นตรง ๆ", p2.locator("#inputPid").count() == 1)
-        ec5 = engine.enter_classic_mode(p2)
-        check("เว็บรุ่นเดิม: เรียกแล้วเงียบ ไม่คลิกอะไร", ec5 == {"ticked": False, "person": False}
-              and p2.locator("#inputPid").count() == 1)
-        ctx2.close()
+        page.goto(url.replace("search/criteria/person", "home"))
+        page.wait_for_timeout(500)
+        r3 = engine.enter_classic_mode(page)
+        check("หน้า 'ระบบสืบค้น': คลิกการ์ด 'บุคคล' ถูกใบ (ไม่ใช่ยานพาหนะ/ข้อมูลคดี/เมนู 'ระบบสืบค้นบุคคล')",
+              r3["person"] and "criteria/person" in page.url, page.url)
 
-        # หน้าเข้าสู่ระบบ → เงียบเช่นกัน (ยังไม่ login ไม่มีอะไรให้ติ๊ก)
-        mock_crimes.STATE["classic_prompt"] = True
-        mock_crimes.STATE["logged_in"] = False
+        print("\n── เว็บพากลับโหมดใหม่กลางรอบค้น → สลับกลับก่อนค้นเสมอ ──")
+        pid = "3100000000001"
+        MS["cases"][pid] = [{"charge": "ลักทรัพย์", "year": "2560", "status": "ฟ้อง", "caseNo": "1/2560"}]
+        page.evaluate("() => { localStorage.setItem('uiMode','new'); location.hash = '#/iv/search/main'; }")
+        page.wait_for_timeout(500)
+        engine._LAST_MODE_CLICK = 0.0
+        notes2 = []
+        cases = engine.search_one_id(page, pid, note=notes2.append, reason="ตรวจสอบข้อมูลทั่วไป")
+        check("search_one_id สลับเป็นโหมดเดิมเองแล้วค้นสำเร็จ (ได้ 1 คดี · เว็บถูกค้น 1 ครั้ง)",
+              isinstance(cases, list) and len(cases) == 1 and MS["hits"].get(pid) == 1
+              and not engine.is_new_ui(page), f"{cases} hits={MS['hits'].get(pid)} {notes2[-3:]}")
+        real_ecm = engine.enter_classic_mode
+        engine.enter_classic_mode = lambda page, note=None: dict(NO_OP)   # จำลอง: สวิตช์ใช้ไม่ได้
+        page.evaluate("() => { localStorage.setItem('uiMode','new'); location.hash = '#/iv/search/main'; }")
+        page.wait_for_timeout(500)
+        pid2 = "3100000000002"
+        err = ""
+        try:
+            engine.search_one_id(page, pid2, reason="ตรวจสอบข้อมูลทั่วไป")
+        except RuntimeError as e:
+            err = str(e)
+        finally:
+            engine.enter_classic_mode = real_ecm
+        check("สลับโหมดไม่สำเร็จ → ไม่ค้นในโหมดใหม่ (กัน 'ไม่พบคดี' ปลอม) · error ชัด ลองแถวนี้ใหม่ได้",
+              "โหมดหน้าจอใหม่" in err and MS["hits"].get(pid2, 0) == 0
+              and engine.classify_error(err) == "retry", err[:160])
+        ctx.close()
+
         ctx3 = b.new_context()
+        MS["logged_in"] = False
         p3 = ctx3.new_page()
         p3.goto(url, wait_until="domcontentloaded")
         p3.wait_for_timeout(700)
-        ec6 = engine.enter_classic_mode(p3)
-        check("หน้าเข้าสู่ระบบ: เงียบ ไม่แตะอะไร", ec6 == {"ticked": False, "person": False}
-              and engine.is_login_page(p3))
+        check("หน้าเข้าสู่ระบบ: เงียบ ไม่แตะอะไร", engine.enter_classic_mode(p3) == NO_OP and engine.is_login_page(p3))
+        MS["logged_in"] = True
         ctx3.close()
 
-        print("\n── กรณีขอบจากรีวิว PR #40 (DOM จำลองตรง ๆ บน Chromium) ──")
+        print("\n── กรณีขอบของสวิตช์/กล่องยืนยัน (DOM จำลองตรง ๆ) ──")
+        HEAD = '<div class="hdr"><span>[ โหมดหน้าจอ (เดิม/ใหม่) ] :</span> {sw}</div>'
+        NB = ('<label class="toggle-label"><input type="checkbox" id="t" style="position:absolute;width:1px;height:1px;'
+              'overflow:hidden;clip:rect(0 0 0 0)" {chk} onchange="{h}"><span class="toggle">sw</span></label>')
         p4 = b.new_page()
-        # (1) ปุ่ม 'ยืนยัน' ของหน้าข้างหลังกล่อง vs ปุ่ม 'ตกลง' ของกล่องเอง (โครงแบบ Nebular overlay ใน nb-layout)
-        p4.set_content("""<html><body><div id="layout">
-          <form><input id="pageField"><button type="button" id="pageOk"
-            onclick="window.__page=(window.__page||0)+1">ยืนยัน</button></form>
-          <div id="ov" style="position:fixed;inset:0;background:#0006"><div id="dlg" style="background:#fff;margin:60px;padding:20px">
-            <label><input type="checkbox" id="cc"> <span>ใช้โหมดหน้าจอเดิม</span></label>
-            <div><button type="button" id="dlgOk" onclick="window.__dlg=(window.__dlg||0)+1">ตกลง</button></div>
-          </div></div></div></body></html>""")
-        r1 = engine.enter_classic_mode(p4)
-        check("กดปุ่ม 'ตกลง' ของกล่องเอง ไม่ใช่ปุ่ม 'ยืนยัน' ของหน้าข้างหลัง",
-              r1.get("ticked") and p4.evaluate("() => [window.__dlg||0, window.__page||0]") == [1, 0]
-              and p4.evaluate("() => document.getElementById('cc').checked"), str(r1))
-        # (2) ติ๊กอยู่แล้ว + ไม่มีปุ่มที่ตรง → ต้องเงียบ (ไม่รายงานว่าทำ ไม่บันทึกซ้ำทุกรอบตรวจ)
-        p4.set_content("""<html><body><div><label><input type="checkbox" id="cc" checked>
-          <span>ใช้โหมดหน้าจอเดิม</span></label><button>ยืนยันการเปลี่ยนแปลง</button></div></body></html>""")
-        notes2 = []
-        r2 = [engine.enter_classic_mode(p4, note=notes2.append) for _ in range(3)]
-        check("ติ๊กอยู่แล้ว+ไม่เจอปุ่ม → ไม่รายงาน ไม่บันทึกซ้ำ (3 รอบ = 0 บรรทัด)",
-              all(x == {"ticked": False, "person": False} for x in r2) and notes2 == []
-              and p4.evaluate("() => document.getElementById('cc').checked"), f"{r2} {notes2}")
-        # (3) ช่องติ๊กแบบ custom (role=checkbox) ที่ติ๊กอยู่แล้ว → ห้ามคลิกจนกลายเป็นติ๊กออก
-        p4.set_content("""<html><body><div id="d"><div id="cb" role="checkbox" aria-checked="true"
-            onclick="this.setAttribute('aria-checked', this.getAttribute('aria-checked')==='true'?'false':'true')">
-            <span>ใช้โหมดหน้าจอเดิม</span></div>
-          <button onclick="window.__mode=document.getElementById('cb').getAttribute('aria-checked')">ยืนยัน</button></div></body></html>""")
-        r3 = engine.enter_classic_mode(p4)
-        check("custom checkbox ที่ติ๊กอยู่แล้ว: ไม่สลับออก และยืนยันด้วยโหมดเดิม",
-              p4.evaluate("() => document.getElementById('cb').getAttribute('aria-checked')") == "true"
-              and p4.evaluate("() => window.__mode") == "true", str(r3))
-        # (4) label[for] — กล่องเดียวกันมีช่อง 'ไม่ต้องแสดงอีก' อยู่ก่อน ต้องติ๊กช่องของโหมดเดิมเท่านั้น
-        p4.set_content("""<html><body><div><input id="dont" type="checkbox"><label for="dont">ไม่ต้องแสดงข้อความนี้อีก</label>
-          <input id="classic" type="checkbox"><label for="classic">ใช้โหมดหน้าจอเดิม</label></div>
-          <button>ยืนยัน</button></body></html>""")
+        p4.set_content(HEAD.format(sw=NB.format(chk="", h="")))
+        engine._LAST_MODE_CLICK = 0.0
+        check("สวิตช์ปิดอยู่แล้ว (โหมดเดิม) → ไม่กด เงียบ",
+              engine.enter_classic_mode(p4) == NO_OP and not p4.evaluate("() => document.getElementById('t').checked"))
+        p4.set_content(HEAD.format(sw=NB.format(chk="checked", h="")))
+        engine._LAST_MODE_CLICK = 0.0
+        r = engine.enter_classic_mode(p4)
+        check("สวิตช์เปิด (โหมดใหม่) ไม่มีกล่องยืนยัน → กดครั้งเดียว เหลือสถานะปิด",
+              r["ticked"] and not p4.evaluate("() => document.getElementById('t').checked"), str(r))
+        p4.set_content('<button id="pageOk" onclick="window.__page=1">ยืนยัน</button>' + HEAD.format(sw=NB.format(
+            chk="checked",
+            h="this.checked=true;setTimeout(()=>{const d=document.createElement('div');d.setAttribute('role','dialog');"
+              "d.innerHTML='เปลี่ยนโหมดหน้าจอ? <button id=no>ยกเลิก</button> <button id=ok>ตกลง</button>';"
+              "document.body.appendChild(d);d.querySelector('#ok').onclick=()=>{window.__dlg=1;"
+              "document.getElementById('t').checked=false;d.remove();};},200)")))
+        engine._LAST_MODE_CLICK = 0.0
+        r = engine.enter_classic_mode(p4)
+        check("กล่องยืนยันเด้งช้า: กด 'ตกลง' ในกล่อง — ไม่กดปุ่ม 'ยืนยัน' ของหน้าข้างหลัง",
+              r["confirm"] == "ตกลง" and p4.evaluate("() => [window.__dlg||0, window.__page||0]") == [1, 0]
+              and not p4.evaluate("() => document.getElementById('t').checked"), str(r))
+        p4.set_content(HEAD.format(sw='<div id="sw" role="switch" aria-checked="true" onclick="this.setAttribute('
+                                      "'aria-checked', this.getAttribute('aria-checked')==='true'?'false':'true')\">"
+                                      "sw</div>"))
+        engine._LAST_MODE_CLICK = 0.0
         engine.enter_classic_mode(p4)
-        check("label[for]: ติ๊กช่องของ 'ใช้โหมดหน้าจอเดิม' เท่านั้น ไม่ไปติ๊กช่องอื่นในกล่อง",
-              p4.evaluate("() => [document.getElementById('classic').checked, document.getElementById('dont').checked]")
-              == [True, False])
+        check("สวิตช์แบบ custom (role=switch) เปิดอยู่ → กดให้ปิด",
+              p4.evaluate("() => document.getElementById('sw').getAttribute('aria-checked')") == "false")
+        engine._LAST_MODE_CLICK = 0.0
+        check("สวิตช์ custom ปิดแล้ว → เรียกซ้ำไม่กดกลับ",
+              engine.enter_classic_mode(p4) == NO_OP
+              and p4.evaluate("() => document.getElementById('sw').getAttribute('aria-checked')") == "false")
+        p4.set_content('<div role="dialog">แจ้งเตือนทั่วไป <button>ปิด</button></div>' + HEAD.format(
+            sw=NB.format(chk="checked", h="")))
+        engine._LAST_MODE_CLICK = 0.0
+        check("มีกล่องโต้ตอบอื่นเปิดค้าง → ยังไม่กดสวิตช์ (ไม่กดซ้อนใต้กล่อง)",
+              engine.enter_classic_mode(p4)["ticked"] is False and p4.evaluate("() => document.getElementById('t').checked"))
+        p4.set_content('<label><input type="checkbox" id="c"> ใช้โหมดหน้าจอเดิม</label>')
+        engine._LAST_MODE_CLICK = 0.0
+        engine.enter_classic_mode(p4)
+        check("แบบช่องติ๊ก 'ใช้โหมดหน้าจอเดิม' (ติ๊ก = โหมดเดิม) → ติ๊กให้",
+              p4.evaluate("() => document.getElementById('c').checked"))
+        p4.set_content(HEAD.format(sw=NB.format(chk="checked", h="this.checked=true")))   # สวิตช์ไม่ยอมเปลี่ยน
+        engine._LAST_MODE_CLICK = 0.0
+        engine.enter_classic_mode(p4)
+        p4.evaluate("() => { window.__n = 0; document.getElementById('t').addEventListener('click', () => window.__n++); }")
+        engine.enter_classic_mode(p4)
+        check("สวิตช์ไม่ตอบสนอง → ไม่กดรัวทุกรอบตรวจ (เว้นอย่างน้อย 10 วิ)",
+              p4.evaluate("() => window.__n") == 0, p4.evaluate("() => window.__n"))
         p4.close()
         b.close()
 
