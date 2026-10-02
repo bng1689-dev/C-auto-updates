@@ -318,6 +318,23 @@ def main():
     st = c.post("/api/login", json={"username": "admin1", "password": "fourth999"})
     me = c.get("/api/me").get_json()
     check("/api/me: admin_stale=False เมื่อเปิดซองได้", st.status_code == 200 and me.get("admin_stale") is False and me.get("central_manager") is True)
+    check("เปลี่ยนรหัสผ่านของตัวเองแล้วยังถือสิทธิ์ต่อได้ (จำรหัสใหม่)",
+          c.post("/api/password", json={"current": "fourth999", "new": "fifth999"}).status_code == 200
+          and server._admin_token(uid1) == ADMIN)
+    real_change = db.change_user_password
+
+    def _remote_lands(uid, pw, admin_envelope=None):
+        out = real_change(uid, pw, admin_envelope=admin_envelope)
+        with db.signing(False):             # จังหวะเดียวกัน: ซิงก์เบื้องหลังนำรหัสผ่านที่ถูกเปลี่ยนจากเครื่องอื่นมาทับ
+            real_change(uid, "remote999")
+        return out
+    db.change_user_password = _remote_lands
+    try:
+        r = c.post("/api/password", json={"current": "fifth999", "new": "sixth999"})
+    finally:
+        db.change_user_password = real_change
+    check("รหัสผ่านจากเครื่องอื่นมาทับระหว่างเปลี่ยนรหัสเอง → สิทธิ์ไม่ถูกผูกกับรหัสของคนอื่น (ปล่อยทิ้ง) (รีวิว Codex PR #42)",
+          r.status_code == 200 and server._admin_token(uid1) == "", str(r.get_json()))
     a3.post("/api/logout")
     c.post("/api/logout")
 

@@ -1,7 +1,7 @@
 {
   "version": "3.13.1",
   "url": "https://raw.githubusercontent.com/bng1689-dev/C-auto-updates/main/CRIMES_AUTO_update_v3.13.1.zip",
-  "sha256": "156ae66e512436ceb082075e07bba94b6b5ae2bd2735a718bbf5fe831ad0e439",
+  "sha256": "1cf442fc67895f0a299836b0a053b9764bad4339c12341e441859fa1768492bf",
   "open": false,
   "notes": "ความปลอดภัย: เมื่อรหัสผ่านของ Superadmin ถูกเปลี่ยน (รวมถึงจากเครื่องรุ่นเก่า) สิทธิ์ผู้ดูแลที่ถอดไว้ด้วยรหัสเดิมในเครื่องอื่นถูกยกเลิกทันที — ต้องเข้าสู่ระบบด้วยรหัสใหม่จึงใช้สิทธิ์ได้ต่อ"
 }
