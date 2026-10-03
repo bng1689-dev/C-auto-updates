@@ -182,109 +182,59 @@ def main():
           r.status_code == 200 and (s.get("autostart_delay_sec"), s.get("hide_on_start"), s.get("done_bell")) == (8, True, True),
           str(r.get_json()))
 
-    print("\n── ย่อโปรแกรม/ซ่อน Chrome เมื่อเริ่มค้น · คืนหน้าต่างเมื่อจบ/ต้องให้ผู้ใช้ทำอะไร · กระดิ่ง ──")
+    print("\n── ย่อโปรแกรมเมื่อเริ่มค้น (Chrome คงไว้ตามเดิม) · คืนหน้าต่างเมื่อจบ/ต้องให้ผู้ใช้ทำอะไร · กระดิ่ง ──")
     rings = []
     real_ring = worker.ring_bell
     worker.ring_bell = lambda: rings.append(1) or True
     m = worker.RunManager()
     ev = []
     m.ui_hook = ev.append
-    page = FakePage()
-    m._page = page
     m.state = "running"
-    m._hide_for_run(page)
-    b = page.win.bounds
-    check("เริ่มค้น → Chrome เลื่อนออกนอกจอ (ไม่ย่อ — Chrome ที่ถูกย่อหยุดวาดหน้า) + ย่อโปรแกรม · hidden=True",
-          m.hidden and b["left"] == worker.CHROME_HIDE_X and b["top"] == worker.CHROME_HIDE_Y
-          and b["windowState"] == "normal" and ev == ["minimize"] and m.status()["hidden"] is True, f"{b} {ev}")
-    check("ซ่อนแล้วขนาด Chrome เท่าตอนเต็มจอ (หน้าเว็บที่ค้นไม่แคบลง)", (b["width"], b["height"]) == (1200, 800), str(b))
-    check("ไม่มีคำสั่ง 'minimized' กับ Chrome เลย",
-          not any(p and p.get("bounds", {}).get("windowState") == "minimized" for _, p in page.win.calls))
-    check("บันทึกการทำงานบอกวิธีดู Chrome (ปุ่ม 👁)", any("👁" in ln for ln in m.log_lines), str(list(m.log_lines)[-2:]))
-    m._hide_for_run(page)
-    check("สั่งซ่อนซ้ำ → ไม่ทำซ้ำ", ev == ["minimize"])
-    m._unhide(page, "done")
-    b = page.win.bounds
-    check("จบรอบ → Chrome กลับตำแหน่ง/ขนาดเดิม และกลับเป็นเต็มจอเหมือนเดิม · โปรแกรมเด้งกลับ (done)",
-          not m.hidden and (b["left"], b["top"], b["width"], b["height"]) == (10, 20, 1200, 800)
-          and b["windowState"] == "maximized" and ev == ["minimize", "done"], f"{b} {ev}")
-    m._unhide(page, "done")
-    check("ไม่ได้ซ่อนอยู่ก็ยังเรียกความสนใจได้ (done/attention) แต่ไม่แตะ Chrome",
-          ev[-1] == "done" and len(ev) == 3)
-    calls_before = len(page.win.calls)
-    m._unhide(page, "restore")
-    check("ไม่ได้ซ่อนอยู่ + restore → ไม่ทำอะไร", len(ev) == 3 and len(page.win.calls) == calls_before)
+    m._minimize_for_run()
+    check("เริ่มค้น → ย่อหน้าต่างโปรแกรม (minimize) · สถานะบอกว่าย่ออยู่",
+          ev == ["minimize"] and m.status()["app_minimized"] is True, f"{ev}")
+    check("บันทึกการทำงานบอกว่าค้นต่อตามปกติ และหน้าต่าง Chrome เปิดไว้ตามเดิม",
+          any("ย่อโปรแกรมระหว่างค้น" in ln and "Chrome เปิดไว้ตามเดิม" in ln for ln in m.log_lines), str(list(m.log_lines)[-2:]))
+    m._minimize_for_run()
+    check("สั่งย่อซ้ำ → ไม่ทำซ้ำ", ev == ["minimize"])
+    m._restore_app("done")
+    check("จบรอบ → โปรแกรมเด้งกลับ (done)", ev == ["minimize", "done"] and m.status()["app_minimized"] is False)
+    m._restore_app("done")
+    check("ไม่ได้ย่ออยู่ก็ยังเรียกความสนใจได้ (done/attention)", ev[-1] == "done" and len(ev) == 3)
+    m._restore_app("restore")
+    check("ไม่ได้ย่ออยู่ + restore → ไม่ทำอะไร", len(ev) == 3)
+    wsrc = (APP / "backend" / "worker.py").read_text(encoding="utf-8")
+    check("ไม่แตะหน้าต่าง Chrome เลย (ไม่ย่อ/ไม่ย้ายออกนอกจอ — เคยทำให้การวาดหน้าช้าจนรอบค้นค้างบน Chrome บางรุ่น)",
+          "setWindowBounds" not in wsrc and "getWindowForTarget" not in wsrc and "CHROME_HIDE" not in wsrc)
 
     auth.update_config(hide_on_start=False)
     m2 = worker.RunManager()
     ev2 = []
     m2.ui_hook = ev2.append
-    p2 = FakePage()
-    m2._hide_for_run(p2)
-    check("ปิดสวิตช์ 'ย่อโปรแกรมเมื่อเริ่มค้น' → ไม่ซ่อน ไม่ย่อ", not m2.hidden and not ev2 and not p2.win.calls)
-    m2.state = "running"
-    m2._page = p2
-    m2.request_window(False)
-    m2._service_window()
-    check("แต่ปุ่ม 🫥 บนแถบสถานะยังสั่งซ่อนได้ (force)", m2.hidden and ev2 == ["minimize"])
-    m2.request_window(True)
-    m2._service_window()
-    check("ปุ่ม 👁 แสดง Chrome → คืนหน้าต่าง (restore) · คำขอถูกใช้ครั้งเดียว",
-          not m2.hidden and ev2 == ["minimize", "restore"] and m2._win_request is None)
-    m2.state = "paused"
-    m2.request_window(False)
-    m2._service_window()
-    check("พักอยู่ก็กด 🫥 ซ่อนได้", m2.hidden and ev2[-1] == "minimize")
-    m2.request_window(True)
-    m2._service_window()
-    m2.state = "idle"
-    m2.request_window(False)
-    m2._service_window()
-    check("ไม่มีรอบค้น → ไม่ซ่อน", not m2.hidden)
+    m2._minimize_for_run()
+    check("ปิดสวิตช์ 'ย่อโปรแกรมเมื่อเริ่มค้น' → ไม่ย่อ", not ev2 and m2.status()["app_minimized"] is False)
     auth.update_config(hide_on_start=True)
     m3 = worker.RunManager()
     m3.step_mode = True
     ev3 = []
     m3.ui_hook = ev3.append
-    m3._hide_for_run(FakePage())
-    check("โหมดทีละขั้น → ไม่ซ่อน (ต้องเห็นทุกสเต็ป)", not m3.hidden and not ev3)
-    m4 = worker.RunManager()
-    m4._chrome_window(None, True)
-    check("Chrome ปิดไปแล้ว (page=None) → ไม่ล้ม", m4._chrome_window(None, False) is False)
-    # Chrome ไม่ยอมย้ายออกนอกจอ → ไม่อ้างว่าซ่อนแล้ว · ยังย่อโปรแกรม · จบรอบคืนโปรแกรม โดยไม่ไปย้าย Chrome ของผู้ใช้
-    m8 = worker.RunManager()
-    ev8 = []
-    m8.ui_hook = ev8.append
-    p8 = FakePage()
-    p8.win.clamp = True
-    m8.state = "running"
-    m8._hide_for_run(p8)
-    check("ย้าย Chrome ออกนอกจอไม่ได้ → hidden=False · ยังย่อโปรแกรม · คืนเต็มจอให้ Chrome · บันทึกบอกตามจริง",
-          not m8.hidden and ev8 == ["minimize"] and p8.win.bounds["windowState"] == "maximized"
-          and any("ซ่อนหน้าต่าง Chrome ไม่ได้" in ln for ln in m8.log_lines), f"{p8.win.bounds} {ev8}")
-    n_calls = len(p8.win.calls)
-    m8._unhide(p8, "restore")
-    check("หยุดรอบ → คืนหน้าต่างโปรแกรมที่ย่อไว้ (restore) · ไม่แตะ Chrome",
-          ev8 == ["minimize", "restore"] and not any(c[0] == "Browser.setWindowBounds" for c in p8.win.calls[n_calls:]),
-          f"{ev8} {p8.win.calls[n_calls:]}")
-    m9 = worker.RunManager()
-    p9 = FakePage()
-    p9.win.bounds.update(windowState="normal", left=300)
-    check("คืน Chrome โดยไม่รู้ตำแหน่งเดิมและ Chrome ไม่ได้อยู่นอกจอ → ไม่ย้าย",
-          m9._chrome_window(p9, False) is True and not any(c[0] == "Browser.setWindowBounds" for c in p9.win.calls))
-    wsrc0 = (APP / "backend" / "worker.py").read_text(encoding="utf-8")
-    err_path = wsrc0[wsrc0.index('self.state = "error"\n            self.autostart_in = 0'):][:900]
-    check("รอบล้มกลางทาง → ปิดชุดบันทึกทีละขั้นด้วย (ไม่ค้างเป็น 'กำลังบันทึก')",
-          "self._recorder.finish(None)" in err_path and "self._recorder = None" in err_path)
+    m3._minimize_for_run()
+    check("โหมดทีละขั้น → ไม่ย่อ (ต้องเห็นทุกสเต็ป)", not ev3)
 
-    # พักเพราะต้องให้ผู้ใช้ทำอะไร (หลุดล็อกอิน) ระหว่างซ่อน → คืนหน้าต่าง + กระดิ่ง → ค้นต่อ → กลับไปซ่อน
+    def broken_hook(e):
+        raise RuntimeError("window gone")
+    m4 = worker.RunManager()
+    m4.ui_hook = broken_hook
+    m4._minimize_for_run()
+    m4._restore_app("done")
+    check("hook หน้าต่างพัง → งานค้นไม่ล้ม", m4.status()["app_minimized"] is False)
+
+    # พักเพราะต้องให้ผู้ใช้ทำอะไร (หลุดล็อกอิน) ระหว่างย่อ → คืนหน้าต่าง + กระดิ่ง → ค้นต่อ → กลับไปย่อ
     m5 = worker.RunManager()
     ev5 = []
     m5.ui_hook = ev5.append
-    p5 = FakePage()
-    m5._page = p5
     m5.state = "running"
-    m5._hide_for_run(p5)
+    m5._minimize_for_run()
     auth.update_config(done_bell=True)
     rings.clear()
     out = {}
@@ -295,29 +245,26 @@ def main():
             break
         time.sleep(0.05)
     time.sleep(0.2)
-    shown = not m5.hidden and p5.win.bounds["left"] == 10
+    shown = m5.status()["app_minimized"] is False
     m5._resume_event.set()
     th.join(5)
-    check("หลุดล็อกอินระหว่างซ่อน → Chrome+โปรแกรมเด้งกลับ (attention) + กระดิ่ง",
+    check("หลุดล็อกอินระหว่างย่อ → โปรแกรมเด้งกลับ (attention) + กระดิ่ง",
           shown and ev5[:2] == ["minimize", "attention"] and rings == [1], f"{ev5} rings={rings}")
-    check("ค้นต่อ ▶ → กลับไปซ่อนเหมือนเดิม", out.get("r") is True and m5.hidden and ev5 == ["minimize", "attention", "minimize"],
-          f"{ev5}")
+    check("ค้นต่อ ▶ → กลับไปย่อเหมือนเดิม", out.get("r") is True and ev5 == ["minimize", "attention", "minimize"], f"{ev5}")
     m6 = worker.RunManager()
     ev6 = []
     m6.ui_hook = ev6.append
-    m6._page = FakePage()
     m6.state = "running"
-    m6._hide_for_run(m6._page)
+    m6._minimize_for_run()
     rings.clear()
     th = threading.Thread(target=lambda: m6._pause_wait("manual"), daemon=True)
     th.start()
     time.sleep(0.4)
     m6._resume_event.set()
     th.join(5)
-    check("กดพักเอง (manual) → ไม่เด้งหน้าต่าง ไม่มีกระดิ่ง", ev6 == ["minimize"] and not rings and m6.hidden, f"{ev6} {rings}")
+    check("กดพักเอง (manual) → ไม่เด้งหน้าต่าง ไม่มีกระดิ่ง", ev6 == ["minimize"] and not rings, f"{ev6} {rings}")
     auth.update_config(done_bell=False)
     m7 = worker.RunManager()
-    m7._page = FakePage()
     th = threading.Thread(target=lambda: m7._pause_wait("network"), daemon=True)
     engine_probe = engine.probe_online
     engine.probe_online = lambda timeout=4: True
@@ -329,10 +276,12 @@ def main():
     check("ปิดกระดิ่ง → พักเพราะเน็ตหลุดก็ไม่มีเสียง", not rings)
     auth.update_config(done_bell=True)
     worker.ring_bell = real_ring
-    wsrc = (APP / "backend" / "worker.py").read_text(encoding="utf-8")
     check("จบรอบสมบูรณ์ → คืนหน้าต่าง 'done' + กระดิ่งตามสวิตช์ · หยุด/ปิด Chrome → คืนหน้าต่างเฉย ๆ (ไม่มีกระดิ่ง)",
-          '"done" if finished else "restore"' in wsrc and 'if finished and bool(_cfg_get("done_bell", True))' in wsrc,
-          "")
+          '"done" if finished else "restore"' in wsrc and 'if finished and bool(_cfg_get("done_bell", True))' in wsrc)
+    err_path = wsrc[wsrc.index('self.state = "error"\n            self.autostart_in = 0'):][:900]
+    check("รอบล้มกลางทาง → คืนหน้าต่าง + ปิดชุดบันทึกทีละขั้นด้วย (ไม่ค้างเป็น 'กำลังบันทึก')",
+          'self._restore_app("restore")' in err_path and "self._recorder.finish(None)" in err_path
+          and "self._recorder = None" in err_path)
     wav = worker._bell_wav()
     with wave.open(io.BytesIO(wav)) as w:
         info = (w.getnchannels(), w.getsampwidth(), w.getframerate(), round(w.getnframes() / w.getframerate(), 1))
@@ -436,23 +385,11 @@ def main():
     dsrc = (APP / "desktop.py").read_text(encoding="utf-8")
     check("desktop.py ผูก hook กับงานค้น (server.manager.ui_hook)", "server.manager.ui_hook = _make_ui_hook(" in dsrc)
 
-    print("\n── /api/run/window (ปุ่ม 👁 บนแถบสถานะ) ──")
-    anon = server.app.test_client()
-    check("ไม่ได้ล็อกอิน → 401", anon.post("/api/run/window", json={"show": True}).status_code == 401)
-    server.manager._win_request = None
-    r = c.post("/api/run/window", json={"show": False})
-    check("Super Admin สั่งซ่อน → ส่งคำขอให้ worker (ทำในเธรดงานค้น เพราะ Playwright ผูกเธรด)",
-          r.status_code == 200 and server.manager._win_request == "hide", str(r.get_json()))
-    server.manager.state, server.manager.current_user_id = "running", 999
-    r = mc.post("/api/run/window", json={"show": True})
-    check("สมาชิกที่ไม่ใช่เจ้าของรอบ → 403", r.status_code == 403 and server.manager._win_request == "hide")
-    server.manager.current_user_id = uid
-    r = mc.post("/api/run/window", json={"show": True})
-    check("เจ้าของรอบ → สั่งแสดงได้", r.status_code == 200 and server.manager._win_request == "show")
+    print("\n── สถานะรอบ ──")
     st = c.get("/api/status").get_json()
-    check("สถานะรอบมี hidden + autostart_total (หน้าจอใช้วาดปุ่ม/วงแหวน)", "hidden" in st and "autostart_total" in st,
-          str(sorted(st))[:200])
-    server.manager.state, server.manager.current_user_id, server.manager._win_request = "idle", 0, None
+    check("สถานะรอบมี app_minimized + autostart_total (หน้าจอใช้วาดวงแหวนนับถอยหลัง)",
+          "app_minimized" in st and "autostart_total" in st and "hidden" not in st, str(sorted(st))[:200])
+    check("ไม่มี endpoint ซ่อน/แสดง Chrome แล้ว", c.post("/api/run/window", json={"show": True}).status_code in (404, 405))
 
     print("\n── แก้วันที่ 'ใช้งานล่าสุด' ในตารางสมาชิกทุกเครื่อง (\"ct 03 2026\") ──")
     T = server._hub_time_local
@@ -775,26 +712,17 @@ def ui_checks(member_uid):
         page.wait_for_timeout(500)
         check("กลับหน้าอัปโหลด → เห็น 20 วิ (ค่าที่จำไว้)", page.input_value("#runAutoSec") == "20" and page.is_checked("#runAutoStart"))
 
-        # ---- แถบสถานะ: ปุ่ม 👁 แสดง/ซ่อน Chrome + วงแหวนนับถอยหลังตามวินาทีที่ตั้ง ----
+        # ---- แถบสถานะ: วงแหวนนับถอยหลังตามวินาทีที่ตั้ง · ไม่มีปุ่มซ่อน/แสดง Chrome ----
         mg = server.manager
-        # ระหว่างค้น browser_open เป็นเท็จเสมอ (เป็นจริงหลังจบรอบเท่านั้น) — ปุ่มต้องโผล่ตามสถานะรอบ
-        mg.state, mg.browser_open, mg.hidden, mg.current_user_id = "running", False, True, 0
-        page.wait_for_function("!document.getElementById('btnWinToggle').classList.contains('hidden')", timeout=8000)
-        check("กำลังค้น + Chrome ซ่อนอยู่ → ปุ่ม '👁 แสดง Chrome'", page.inner_text("#btnWinToggle").strip() == "👁 แสดง Chrome")
-        page.click("#btnWinToggle")
-        page.wait_for_timeout(500)
-        check("กด 👁 → ส่งคำขอแสดงให้ worker", mg._win_request == "show")
-        mg.hidden = False
-        page.wait_for_function("document.getElementById('btnWinToggle').textContent.includes('ซ่อน')", timeout=8000)
-        page.click("#btnWinToggle")
-        page.wait_for_timeout(500)
-        check("แสดงอยู่ → ปุ่มเป็น '🫥 ซ่อน Chrome' กดแล้วขอซ่อน", mg._win_request == "hide")
+        mg.state, mg.browser_open, mg.current_user_id = "running", False, 0
+        page.wait_for_timeout(1500)
+        check("กำลังค้น → ไม่มีปุ่มซ่อน/แสดง Chrome (Chrome คงไว้ตามเดิม)", page.locator("#btnWinToggle").count() == 0)
         mg.state, mg.autostart_in, mg.autostart_total = "awaiting_login", 15, 20
         page.wait_for_function("document.getElementById('rbPct').textContent === '15 วิ'", timeout=8000)
         dash = page.evaluate("parseFloat(document.getElementById('rbRingFill').style.strokeDashoffset)")
         check("รอเข้าสู่ระบบ: วงแหวนนับถอยหลังเต็มสเกลตามวินาทีที่ตั้ง (15/20 = 75%)", abs(dash - 251.2 * 0.25) < 1.5, str(dash))
         check("ปุ่มเริ่มบอกวินาทีที่เหลือ", "เริ่มเองใน 15 วิ" in page.inner_text("#btnConfirmLogin"))
-        mg.state, mg.browser_open, mg.hidden, mg._win_request, mg.autostart_in, mg.autostart_total = "idle", False, False, None, 0, 0
+        mg.state, mg.browser_open, mg.autostart_in, mg.autostart_total = "idle", False, 0, 0
 
         # ---- สัญลักษณ์สิทธิ์ในตารางสมาชิก ----
         goto("members")
@@ -834,6 +762,29 @@ def ui_checks(member_uid):
         page.wait_for_function("document.getElementById('recTable').textContent.includes('บัญชีที่แก้แล้ว')", timeout=5000)
         check("✎ แก้ชื่อบัญชีที่แสดง → ตารางและ summary.json เปลี่ยน",
               json.loads((rec2.dir / "summary.json").read_text(encoding="utf-8"))["account"] == "บัญชีที่แก้แล้ว")
+        # Codex P2 (PR #43): คำตอบ 'สเต็ป' ของชุดที่ปิดไปแล้วมาช้ากว่าชุดใหม่ → ต้องถูกทิ้ง ไม่ใช่ไปแสดง/ลบผิดชุด
+        real_steps = server.engine.recording_steps
+
+        def slow_steps(name):
+            if name == rec1.name:
+                time.sleep(1.5)
+            return real_steps(name)
+        server.engine.recording_steps = slow_steps
+        try:
+            page.locator("#recTable tbody tr", has_text="acctUI").filter(has_not_text="แก้แล้ว").locator("button", has_text="ดู/ลบสเต็ป").click()
+            page.wait_for_selector("#recStepsModal:not(.hidden)")
+            page.click("#btnRecStepsClose")
+            page.locator("#recTable tbody tr", has_text="แก้แล้ว").locator("button", has_text="ดู/ลบสเต็ป").click()
+            page.wait_for_selector("#recStepsModal:not(.hidden) .rec-step", timeout=8000)
+            page.wait_for_timeout(2500)               # คำตอบของชุดแรก (ช้า) มาถึงแล้ว
+            shown = page.evaluate("""()=>[document.querySelectorAll('#recStepsList .rec-step').length,
+                document.getElementById('recStepsTitle').textContent,
+                typeof _recStepsOf === 'undefined' ? null : (_recStepsOf && _recStepsOf.name)]""")
+            check("ปิดหน้าต่างสเต็ปชุดแรกที่ยังโหลดไม่เสร็จ แล้วเปิดชุดที่สอง → คำตอบที่มาช้าของชุดแรกถูกทิ้ง (แสดง/ลบเฉพาะชุดที่สอง)",
+                  shown[0] == 1 and "แก้แล้ว" in shown[1] and shown[2] == rec2.name, str(shown))
+        finally:
+            server.engine.recording_steps = real_steps
+        page.click("#btnRecStepsClose")
         page.locator("#recTable tbody tr", has_text="acctUI").filter(has_not_text="แก้แล้ว").locator("button", has_text="ดู/ลบสเต็ป").click()
         page.wait_for_selector("#recStepsModal:not(.hidden) .rec-step", timeout=8000)
         page.wait_for_function("[...document.querySelectorAll('#recStepsList img.rec-thumb')].every(i=>i.complete && i.naturalWidth>0)",
