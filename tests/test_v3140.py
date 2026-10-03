@@ -425,7 +425,8 @@ def main():
           and row.get("display_name") == "JOJO", str(row))
     html = (APP / "frontend" / "index.html").read_text(encoding="utf-8")
     check("หน้าจอไม่ตัดสตริงเวลาตรง ๆ แล้ว (ใช้ fmtHubTime)",
-          "fmtHubTime(r.last_seen)" in html and "fmtHubTime(r.received_at)" in html
+          # v3.15.0: ตารางรวมรายคน — ใช้เวลาล่าสุดของกลุ่ม (ls) ผ่าน fmtHubTime เหมือนกัน
+          ("fmtHubTime(r.last_seen)" in html or "fmtHubTime(ls)" in html) and "fmtHubTime(r.received_at)" in html
           and '(r.last_seen||"").replace("T"," ").slice(5,16)' not in html)
 
     print("\n── บันทึกโหมดทีละขั้น: แก้ไข/ลบ (Super Admin · ลบต้องยืนยันรหัสผ่าน · ชุดที่กำลังบันทึกห้ามแตะ) ──")
