@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""v3.6.2/v3.10.0 — เริ่มค้นเองหลังตรวจพบว่าเข้าสู่ระบบแล้ว — ไม่เปิดเบราว์เซอร์
+"""v3.6.2/v3.10.0/v3.14.0 — เริ่มค้นเองหลังตรวจพบว่าเข้าสู่ระบบแล้ว — ไม่เปิดเบราว์เซอร์
 
-  • v3.10.0: เป็นสวิตช์ใน Setting (autostart_enabled) · ค่าเริ่มต้น "ปิด" — ตรวจพบว่าเข้าสู่ระบบแล้วก็ไม่นับถอยหลัง
-    รอกดปุ่มเท่านั้น (เจ้าของโปรเจกต์สั่ง "สถานะเริ่มต้นให้ปิดไว้ ไม่ต้องนับถอยหลัง")
-  • เปิดสวิตช์แล้ว: นับถอยหลัง 30 วินาที (v3.6.2) — ข้อความ/หน้าจอดึงตัวเลขจากค่าคงที่ ไม่มีเลขฝังไว้
-  • _await_login นับครบ 30 วิจริงก่อนเริ่มเอง (จำลองนาฬิกา) และเริ่มทันทีเมื่อกดปุ่ม
+  • v3.10.0: เป็นสวิตช์ (autostart_enabled) · ปิดอยู่ = ตรวจพบว่าเข้าสู่ระบบแล้วก็ไม่นับถอยหลัง รอกดปุ่มเท่านั้น
+  • v3.14.0: เจ้าของสั่ง "แก้ไขสถานะเป็นเริ่มค้นอัตโนมัติใน .... วินาที (ผู้ใช้กำหนดเองได้ 3–30 วินาที และจำค่าไว้)"
+    → ค่าเริ่มต้นเปิด นับ 10 วินาที · ตั้งได้ 3–30 (นอกช่วง = ตัดเข้าช่วง) · ข้อความ/หน้าจอดึงตัวเลขจากค่าที่ตั้ง ไม่มีเลขฝังไว้
+  • _await_login นับครบตามที่ตั้งจริงก่อนเริ่มเอง (จำลองนาฬิกา) และเริ่มทันทีเมื่อกดปุ่ม
 """
 import os
 import re
@@ -81,18 +81,26 @@ def run_await_login(press_start_at=None):
 
 
 def main():
-    print("── ค่าคงที่และข้อความ ──")
-    check("นับถอยหลังเริ่มเอง 30 วินาที", worker.RunManager.AUTOSTART_SEC == 30, str(worker.RunManager.AUTOSTART_SEC))
+    print("── ค่าเริ่มต้นและข้อความ ──")
+    check("v3.14.0: ค่าเริ่มต้นนับถอยหลัง 10 วินาที · ตั้งได้ 3–30",
+          (auth.AUTOSTART_DEFAULT_SEC, auth.AUTOSTART_MIN_SEC, auth.AUTOSTART_MAX_SEC) == (10, 3, 30)
+          and not hasattr(worker.RunManager, "AUTOSTART_SEC"))
+    check("ตัดค่าเข้าช่วง 3–30: 1→3 · 99→30 · '12'→12 · 7.6→8 · ค่าเสีย→10",
+          [auth.clamp_autostart_sec(v) for v in (1, 99, "12", 7.6, "x", None)] == [3, 30, 12, 8, 10, 10])
     src = (APP / "backend" / "worker.py").read_text(encoding="utf-8")
-    check("ข้อความแจ้งดึงตัวเลขจากค่าคงที่ ไม่มี '10 วินาที' ฝังไว้",
-          "{self.AUTOSTART_SEC} วินาที" in src and not re.search(r"\b10 วินาที", src))
+    check("ข้อความแจ้งดึงตัวเลขจากค่าที่ตั้ง ไม่มี 'NN วินาที' ฝังไว้",
+          "{secs} วินาที" in src and "{self._autostart_sec()} วินาที" in src
+          and not re.search(r"\b(10|30) วินาที", src))
     html = (APP / "frontend" / "index.html").read_text(encoding="utf-8")
     check("หน้าจอแสดงตัวเลขจากสถานะ (autostart_in) ทั้งปุ่ม/ขั้นตอน/วงแหวน — ไม่มีเลขตายตัว",
-          html.count("s.autostart_in") >= 4 and "10 วิ" not in html, str(html.count("s.autostart_in")))
+          html.count("s.autostart_in") >= 4 and "10 วิ" not in html,
+          str(html.count("s.autostart_in")))
+    check("v3.14.0: config เริ่มต้น: autostart_enabled=True · 10 วินาที",
+          auth.load_config().get("autostart_enabled") is True and auth.load_config().get("autostart_delay_sec") == 10,
+          str(auth.load_config()))
 
-    print("\n── v3.10.0: สวิตช์เริ่มอัตโนมัติ — ค่าเริ่มต้น 'ปิด' ไม่นับถอยหลัง ──")
-    check("config เริ่มต้น: autostart_enabled=False", auth.load_config().get("autostart_enabled") is False,
-          str(auth.load_config().get("autostart_enabled")))
+    print("\n── สวิตช์ปิด → ไม่นับถอยหลัง ──")
+    auth.update_config(autostart_enabled=False)
     ok, clock, log = run_await_login(press_start_at=8)
     check("ปิดอยู่: ตรวจพบเข้าสู่ระบบแล้วก็ไม่นับถอยหลัง (autostart_in คงเป็น 0) · บันทึกบอกว่าปิดอยู่",
           ok and clock["max_left"] == 0 and any("การเริ่มอัตโนมัติปิดอยู่" in ln for ln in log), str(log[-3:]))
@@ -100,17 +108,25 @@ def main():
     check("หน้าตั้งค่ามีสวิตช์ (setAutoStart) และส่งค่าไปบันทึก",
           'id="setAutoStart"' in html and "autostart_enabled" in html)
 
-    print("\n── เปิดสวิตช์ → นับถอยหลังจริง (นาฬิกาจำลอง) ──")
+    print("\n── เปิดสวิตช์ → นับถอยหลังจริงตามวินาทีที่ตั้ง (นาฬิกาจำลอง) ──")
     auth.update_config(autostart_enabled=True)
-    ok, clock, log = run_await_login()
-    check("ตรวจพบเข้าสู่ระบบ → บันทึกว่าจะเริ่มเองใน 30 วินาที",
-          any("จะเริ่มค้นเองใน 30 วินาที" in ln for ln in log), str(log[-3:]))
-    check("เริ่มเองหลังผ่านไป ≈30 วิ (ไม่ใช่ 10)", ok and 30 <= clock["ticks"] <= 40, f"ticks={clock['ticks']}")
-    check("ตัวนับถอยหลังเริ่มที่ 30 ให้หน้าจอวาดวงแหวน", clock["max_left"] == 30, str(clock["max_left"]))
+    for secs in (10, 25, 3):
+        auth.update_config(autostart_delay_sec=secs)
+        ok, clock, log = run_await_login()
+        check(f"ตั้ง {secs} วิ: บันทึกว่าจะเริ่มเองใน {secs} วินาที",
+              any(f"จะเริ่มค้นเองใน {secs} วินาที" in ln for ln in log), str(log[-3:]))
+        check(f"ตั้ง {secs} วิ: เริ่มเองหลังผ่านไป ≈{secs} วิ", ok and secs <= clock["ticks"] <= secs + 10,
+              f"ticks={clock['ticks']}")
+        check(f"ตั้ง {secs} วิ: ตัวนับเริ่มที่ {secs} ให้หน้าจอวาดวงแหวน", clock["max_left"] == secs, str(clock["max_left"]))
     check("ถึงเวลาแล้วบันทึก '▶ เริ่มค้นอัตโนมัติ'", any("▶ เริ่มค้นอัตโนมัติ" in ln for ln in log))
+    auth.update_config(autostart_delay_sec=99)          # ไฟล์ config ถูกแก้มือเกินช่วง → ใช้ 30
+    ok, clock, log = run_await_login()
+    check("ค่าใน config เกินช่วง (99) → นับ 30", clock["max_left"] == 30 and any("ใน 30 วินาที" in ln for ln in log),
+          str(clock["max_left"]))
 
+    auth.update_config(autostart_delay_sec=20)
     ok, clock, log = run_await_login(press_start_at=5)
-    check("กด 'เริ่มค้นหา' ระหว่างนับ → เริ่มทันที ไม่รอครบ 30", ok and clock["ticks"] < 15, f"ticks={clock['ticks']}")
+    check("กด 'เริ่มค้นหา' ระหว่างนับ → เริ่มทันที ไม่รอครบ", ok and clock["ticks"] < 15, f"ticks={clock['ticks']}")
 
     print(f"\nผล: ผ่าน {PASS} · ตก {FAIL}")
     return 1 if FAIL else 0

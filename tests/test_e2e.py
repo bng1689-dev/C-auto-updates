@@ -68,8 +68,8 @@ engine.SEARCH_URL = f"http://127.0.0.1:{MPORT}/bdasearch/#/bda/search/criteria/p
 engine.SEARCH_HOST = f"127.0.0.1:{MPORT}"
 engine.SPEED_FACTORS = {k: 0.05 for k in range(1, 6)}
 worker.RunManager.RETRY_BACKOFF = (0, 0)
-worker.RunManager.AUTOSTART_SEC = 2
-worker.auth.update_config(autostart_enabled=True)   # v3.10.0: สวิตช์เริ่มอัตโนมัติค่าเริ่มต้นปิด — ชุดนี้ทดสอบทางเริ่มเอง
+# v3.14.0: เริ่มอัตโนมัติค่าเริ่มต้นเปิด 10 วิ (ตั้งได้ 3–30) — ชุดนี้ใช้ค่าต่ำสุดให้รันเร็ว
+worker.auth.update_config(autostart_enabled=True, autostart_delay_sec=3)
 worker.downloads_dir = lambda: DOWNLOADS
 
 
