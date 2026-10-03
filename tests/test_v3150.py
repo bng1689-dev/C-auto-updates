@@ -69,10 +69,10 @@ def hub_members():
     return {m["username"]: m for m in hub.sync_members(URL, TOKEN, "probe", "3.15.0", []).get("members", [])}
 
 
-def machine_b(cmds):
-    env = dict(os.environ, CRIMES_DATA_DIR=str(TEST_DATA / "B"), CRIMES_UPLOAD_DIR=str(TEST_DATA / "B_up"),
+def machine_b(cmds, data="B"):
+    env = dict(os.environ, CRIMES_DATA_DIR=str(TEST_DATA / data), CRIMES_UPLOAD_DIR=str(TEST_DATA / (data + "_up")),
                PYTHONIOENCODING="utf-8")
-    r = subprocess.run([sys.executable, str(HERE / "_hub_machine.py"), str(TEST_DATA / "B"), str(STATE), TOKEN, ADMIN],
+    r = subprocess.run([sys.executable, str(HERE / "_hub_machine.py"), str(TEST_DATA / data), str(STATE), TOKEN, ADMIN],
                        input=json.dumps(cmds), env=env, capture_output=True, text=True, timeout=240)
     if r.returncode:
         raise RuntimeError("machine B: " + r.stderr[-800:])
@@ -218,12 +218,12 @@ def main():
           j["active"] == 1 and j["pending"] == 0 and j["join_req"] == 0 and j["role"] == "member"
           and {k for k, v in j["permissions"].items() if v} == {"view_team", "view_live", "manage_billing"}
           and j["display_name"] == "JOJO-A", str(j))
-    check("รหัสผ่านที่ JOJO เปลี่ยนระหว่างรอยังอยู่ (ไม่ถูกแฮชเก่าบนกลางทับ) → ค้างส่งเป็น 'เปลี่ยนรหัสตัวเอง'",
-          j["pw_tail"] == jojo_tail_new and b["pend"] == 1, str(b["pend"]))
     hm = hub_members()
-    check("ซิงก์รอบถัดไป: ศูนย์กลางรับรหัสใหม่ (ไม่ต้องลายเซ็น) · ไม่ค้างส่ง",
-          b["s4"]["ok"] and b["pend2"] == 0 and str(hm["jojo"]["password_hash"])[-8:] == jojo_tail_new,
-          str(b["s4"])[:300])
+    check("รหัสผ่านที่ JOJO เปลี่ยนระหว่างรอยังอยู่ (ไม่ถูกแฮชเก่าบนกลางทับ) และขึ้นศูนย์กลางในซิงก์รอบเดียวกัน"
+          " ('เปลี่ยนรหัสตัวเอง' ไม่ต้องลายเซ็น) · ไม่ค้างส่ง",
+          j["pw_tail"] == jojo_tail_new and b["pend"] == 0 and str(hm["jojo"]["password_hash"])[-8:] == jojo_tail_new,
+          str(b["pend"]))
+    check("ซิงก์รอบถัดไปไม่มีอะไรค้าง", b["s4"]["ok"] and b["pend2"] == 0, str(b["s4"])[:300])
     check("JOJO เข้าด้วยรหัสใหม่ได้ · รหัสเดิมใช้ไม่ได้", b["login_new"][0] == 200 and b["login_old"][0] != 200
           and b["me_j"][1] == "jojo", str([b["login_old"][0], b["login_new"]]))
     check("temp9 ที่ถูกปฏิเสธ: ปิดใช้งานใน B · เข้าสู่ระบบไม่ได้",
@@ -272,10 +272,30 @@ def main():
           r.status_code == 200 and b["bossb"]["role"] == "member" and b["bossb"]["join_req"] == 0
           and b["bossb"]["active"] == 1 and b["login_b"][0] == 200, str(b["bossb"]))
 
+    print("\n── เจ้าขององค์กรเองตั้งเครื่อง C แบบเครื่องเดี่ยวก่อน → เชื่อม (กลายเป็นคำขอ) → ผูก ADMIN_TOKEN ได้ ──")
+    cc = machine_b([
+        {"op": "setup_local", "u": "ownerc", "p": "ownerc99", "name": "เจ้าของ C"},
+        {"op": "connect", "code": CODE},
+        {"op": "sync", "as": "s1"},
+        {"op": "user_full", "u": "ownerc", "as": "before"},
+        {"op": "bind", "token": ADMIN, "p": "ownerc99"},
+        {"op": "user_full", "u": "ownerc", "as": "after"},
+        {"op": "hold", "as": "hold"},
+    ], data="C")
+    hm = hub_members()
+    check("C: Superadmin ของเครื่องเดี่ยวส่งเป็นคำขอเมื่อองค์กรมี Superadmin แล้ว", cc["before"]["join_req"] == 1
+          and "ownerc" in ((cc["s1"]["summary"] or {}).get("requested") or []), str(cc["before"]))
+    check("C: ผูก ADMIN_TOKEN ตัวจริงกับบัญชีที่ยังเป็นคำขอได้ → ศูนย์กลางรับเป็น Superadmin (ลายเซ็นแทนการอนุมัติ)",
+          cc["bind"][0] == 200 and cc["hold"] == "ownerc" and cc["after"]["join_req"] == 0
+          and cc["after"]["role"] == "super_admin" and hm["ownerc"]["role"] == "super_admin"
+          and not _truthy(hm["ownerc"]["pending"]) and _truthy(hm["ownerc"]["active"]),
+          str([cc["bind"], cc["after"], {k: hm["ownerc"].get(k) for k in ("role", "pending", "active")}])[:500])
+
     print("\n── คำขอหายจากศูนย์กลาง (ชีตถูกล้าง) → ส่งเป็นคำขอใหม่ ไม่ค้างตลอดไป ──")
     uid = db.create_user("ghost7", "ghost77", display_name="ผี")
     with db.get_conn() as conn:
-        conn.execute("UPDATE users SET join_req=1, hub_rev=9, sync_dirty=0, sync_signed=1 WHERE id=?", (uid,))
+        # ค้างส่งรหัสใหม่ของเจ้าของอยู่ด้วย (sync_dirty=1) — ต้องไม่ค้างตลอดไป
+        conn.execute("UPDATE users SET join_req=1, hub_rev=9, sync_dirty=1, sync_signed=1 WHERE id=?", (uid,))
     db.apply_remote_members(list(hub_members().values()), full_directory=True)
     ex = [x for x in db.export_members(signed=False, as_requests=True) if x["username"] == "ghost7"]
     check("แถวที่กลางไม่มีแล้ว: หลุดธงรอ · ส่งใหม่เป็นคำขอ (ไม่ใช่แถวลงนาม)",

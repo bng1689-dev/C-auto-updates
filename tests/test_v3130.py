@@ -279,11 +279,19 @@ def main():
           r.status_code == 200 and db.get_user_by_username("offhub")["sync_signed"] == 0, str(r.get_json()))
     auth.update_config(hub_enabled=True)
     res = server._members_sync_now("test")
-    check("เปิดศูนย์กลางกลับ + Superadmin ถือสิทธิ์อยู่ → offhub ไม่ถูกเซ็นขึ้นกลาง (ค้างรอ Superadmin ยืนยันเอง)",
-          "offhub" not in hub_members() and db.get_user_by_username("offhub")["sync_dirty"] == 1, str(res.get("rejected")))
-    r = c.put(f"/api/admin/members/{db.get_user_by_username('offhub')['id']}", json={"display_name": "นอกศูนย์ (ยืนยันแล้ว)"})
+    # v3.15.0: ไม่ถูกเซ็นเหมือนเดิม แต่ไม่ค้างเงียบ ๆ แล้ว — ขึ้นเป็น 'คำขอสมัคร' (ไม่มีบทบาท/สิทธิ์) รอ Superadmin อนุมัติ
+    off = hub_members().get("offhub") or {}
+    check("เปิดศูนย์กลางกลับ + Superadmin ถือสิทธิ์อยู่ → offhub ไม่ถูกเซ็นขึ้นกลาง (ขึ้นเป็นคำขอรอ Superadmin อนุมัติ)",
+          str(off.get("pending")) in ("1", "True", "true") and off.get("role") == "member"
+          and json.loads(off.get("permissions") or "{}") == {} and db.get_user_by_username("offhub")["join_req"] == 1,
+          str(res.get("rejected")) + str(off)[:200])
+    r = c.post(f"/api/admin/members/{db.get_user_by_username('offhub')['id']}/approve",
+               json={"display_name": "นอกศูนย์ (ยืนยันแล้ว)", "role": "member"})
     server._members_sync_now("test")
-    check("Superadmin แก้แถวนั้นเอง (ยืนยัน) → ลงนามแล้วขึ้นกลาง", r.status_code == 200 and "offhub" in hub_members())
+    off = hub_members().get("offhub") or {}
+    check("Superadmin อนุมัติแถวนั้นเอง (ยืนยัน) → ลงนามแล้วขึ้นกลางเป็นสมาชิก", r.status_code == 200
+          and str(off.get("pending")) in ("0", "False", "false", "") and off.get("display_name") == "นอกศูนย์ (ยืนยันแล้ว)",
+          str(r.get_json()) + str(off)[:200])
     mg.post("/api/logout")
 
     print("\n── รีวิว: ขอบเขตอื่น ๆ ──")
