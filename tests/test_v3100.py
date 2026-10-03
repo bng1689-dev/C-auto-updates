@@ -343,12 +343,13 @@ def main():
           "crimes_last_login_user" in html and "crimes_login_remember" in html and "prefillLogin" in html
           and "rgPw'" not in html.split("localStorage.setItem")[0][-200:])
     s0 = c.get("/api/settings").get_json()
-    c.post("/api/settings", json={"autostart_enabled": True})
-    s1 = c.get("/api/settings").get_json()
     c.post("/api/settings", json={"autostart_enabled": False})
-    check("Setting: สวิตช์เริ่มอัตโนมัติ — ค่าเริ่มต้นปิด · เปิดแล้วจำค่า · ปิดกลับได้",
-          s0.get("autostart_enabled") is False and s1.get("autostart_enabled") is True
-          and c.get("/api/settings").get_json().get("autostart_enabled") is False, f"{s0.get('autostart_enabled')} {s1.get('autostart_enabled')}")
+    s1 = c.get("/api/settings").get_json()
+    c.post("/api/settings", json={"autostart_enabled": True})
+    # v3.14.0: ค่าเริ่มต้นเปลี่ยนเป็น 'เปิด' (เจ้าของสั่ง "แก้ไขสถานะเป็นเริ่มค้นอัตโนมัติใน .... วินาที")
+    check("Setting: สวิตช์เริ่มอัตโนมัติ — ค่าเริ่มต้นเปิด (v3.14.0) · ปิดแล้วจำค่า · เปิดกลับได้",
+          s0.get("autostart_enabled") is True and s1.get("autostart_enabled") is False
+          and c.get("/api/settings").get_json().get("autostart_enabled") is True, f"{s0.get('autostart_enabled')} {s1.get('autostart_enabled')}")
     # กติกาศูนย์กลางที่แข็งขึ้น (สคริปต์ 3.10.0)
     res = push_raw([dict(base, username="evil7", salt="ZZ" * 16)])
     check("รหัสร่วม: salt ไม่ใช่ hex → rejected auth (กันแถวที่ทำให้เครื่องอื่นล้มตอนเทียบรหัสผ่าน)",
