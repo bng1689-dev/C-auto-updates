@@ -64,7 +64,10 @@ class FakeCDP:
         if method == "Browser.getWindowForTarget":
             return {"windowId": 7, "bounds": dict(self.win.bounds)}
         if method == "Browser.setWindowBounds":
-            self.win.bounds.update(params["bounds"])
+            nb = dict(params["bounds"])
+            if self.win.clamp and nb.get("left", 0) < 0:        # Chrome บางรุ่นบังคับให้อยู่ในจอ
+                nb["left"], nb["top"] = 0, 0
+            self.win.bounds.update(nb)
             return {}
         raise RuntimeError(method)
 
@@ -76,6 +79,7 @@ class FakeWin:
     def __init__(self):
         self.bounds = {"left": 10, "top": 20, "width": 1200, "height": 800, "windowState": "maximized"}
         self.calls = []
+        self.clamp = False
 
 
 class FakeCtx:
@@ -156,10 +160,12 @@ def main():
           (s.get("autostart_delay_sec"), s.get("autostart_min"), s.get("autostart_max"),
            s.get("hide_on_start"), s.get("done_bell")) == (10, 3, 30, True, True), str(s)[:300])
     vals = []
-    for v in (2, 45, "17", 12.4, "abc", None):
-        c.post("/api/settings", json={"autostart_delay_sec": v})
+    codes = []
+    for v in (2, 45, "17", 12.4, "abc", None, float("inf"), "1e999"):
+        codes.append(c.post("/api/settings", json={"autostart_delay_sec": v}).status_code)
         vals.append(c.get("/api/settings").get_json().get("autostart_delay_sec"))
-    check("ตั้งวินาที: 2→3 · 45→30 · '17'→17 · 12.4→12 · ค่าเสีย→10 (ค่าเริ่มต้น)", vals == [3, 30, 17, 12, 10, 10], str(vals))
+    check("ตั้งวินาที: 2→3 · 45→30 · '17'→17 · 12.4→12 · ค่าเสีย/อนันต์→10 (ค่าเริ่มต้น) · ไม่มี 500",
+          vals == [3, 30, 17, 12, 10, 10, 10, 10] and set(codes) == {200}, f"{vals} {codes}")
     c.post("/api/settings", json={"autostart_delay_sec": 14, "hide_on_start": False, "done_bell": False})
     s = c.get("/api/settings").get_json()
     check("ตั้ง 14 วิ · ปิดย่อโปรแกรม · ปิดกระดิ่ง → จำค่าไว้ใน config.json",
@@ -191,6 +197,7 @@ def main():
     check("เริ่มค้น → Chrome เลื่อนออกนอกจอ (ไม่ย่อ — Chrome ที่ถูกย่อหยุดวาดหน้า) + ย่อโปรแกรม · hidden=True",
           m.hidden and b["left"] == worker.CHROME_HIDE_X and b["top"] == worker.CHROME_HIDE_Y
           and b["windowState"] == "normal" and ev == ["minimize"] and m.status()["hidden"] is True, f"{b} {ev}")
+    check("ซ่อนแล้วขนาด Chrome เท่าตอนเต็มจอ (หน้าเว็บที่ค้นไม่แคบลง)", (b["width"], b["height"]) == (1200, 800), str(b))
     check("ไม่มีคำสั่ง 'minimized' กับ Chrome เลย",
           not any(p and p.get("bounds", {}).get("windowState") == "minimized" for _, p in page.win.calls))
     check("บันทึกการทำงานบอกวิธีดู Chrome (ปุ่ม 👁)", any("👁" in ln for ln in m.log_lines), str(list(m.log_lines)[-2:]))
@@ -227,7 +234,13 @@ def main():
     m2.state = "paused"
     m2.request_window(False)
     m2._service_window()
-    check("พักอยู่ → ไม่ซ่อน (ซ่อนได้เฉพาะตอนกำลังค้น)", not m2.hidden)
+    check("พักอยู่ก็กด 🫥 ซ่อนได้", m2.hidden and ev2[-1] == "minimize")
+    m2.request_window(True)
+    m2._service_window()
+    m2.state = "idle"
+    m2.request_window(False)
+    m2._service_window()
+    check("ไม่มีรอบค้น → ไม่ซ่อน", not m2.hidden)
     auth.update_config(hide_on_start=True)
     m3 = worker.RunManager()
     m3.step_mode = True
@@ -238,6 +251,31 @@ def main():
     m4 = worker.RunManager()
     m4._chrome_window(None, True)
     check("Chrome ปิดไปแล้ว (page=None) → ไม่ล้ม", m4._chrome_window(None, False) is False)
+    # Chrome ไม่ยอมย้ายออกนอกจอ → ไม่อ้างว่าซ่อนแล้ว · ยังย่อโปรแกรม · จบรอบคืนโปรแกรม โดยไม่ไปย้าย Chrome ของผู้ใช้
+    m8 = worker.RunManager()
+    ev8 = []
+    m8.ui_hook = ev8.append
+    p8 = FakePage()
+    p8.win.clamp = True
+    m8.state = "running"
+    m8._hide_for_run(p8)
+    check("ย้าย Chrome ออกนอกจอไม่ได้ → hidden=False · ยังย่อโปรแกรม · คืนเต็มจอให้ Chrome · บันทึกบอกตามจริง",
+          not m8.hidden and ev8 == ["minimize"] and p8.win.bounds["windowState"] == "maximized"
+          and any("ซ่อนหน้าต่าง Chrome ไม่ได้" in ln for ln in m8.log_lines), f"{p8.win.bounds} {ev8}")
+    n_calls = len(p8.win.calls)
+    m8._unhide(p8, "restore")
+    check("หยุดรอบ → คืนหน้าต่างโปรแกรมที่ย่อไว้ (restore) · ไม่แตะ Chrome",
+          ev8 == ["minimize", "restore"] and not any(c[0] == "Browser.setWindowBounds" for c in p8.win.calls[n_calls:]),
+          f"{ev8} {p8.win.calls[n_calls:]}")
+    m9 = worker.RunManager()
+    p9 = FakePage()
+    p9.win.bounds.update(windowState="normal", left=300)
+    check("คืน Chrome โดยไม่รู้ตำแหน่งเดิมและ Chrome ไม่ได้อยู่นอกจอ → ไม่ย้าย",
+          m9._chrome_window(p9, False) is True and not any(c[0] == "Browser.setWindowBounds" for c in p9.win.calls))
+    wsrc0 = (APP / "backend" / "worker.py").read_text(encoding="utf-8")
+    err_path = wsrc0[wsrc0.index('self.state = "error"\n            self.autostart_in = 0'):][:900]
+    check("รอบล้มกลางทาง → ปิดชุดบันทึกทีละขั้นด้วย (ไม่ค้างเป็น 'กำลังบันทึก')",
+          "self._recorder.finish(None)" in err_path and "self._recorder = None" in err_path)
 
     # พักเพราะต้องให้ผู้ใช้ทำอะไร (หลุดล็อกอิน) ระหว่างซ่อน → คืนหน้าต่าง + กระดิ่ง → ค้นต่อ → กลับไปซ่อน
     m5 = worker.RunManager()
@@ -345,25 +383,56 @@ def main():
             self._top = v
 
     w = Win()
-    hook = desktop._make_ui_hook(w)
+    hook = desktop._make_ui_hook(w, sync=True)
     hook("minimize")
     hook("done")
     check("ย่อจากเต็มจอ → ค้นเสร็จ: คืนเป็นเต็มจอเหมือนเดิม + ดันขึ้นหน้าสุด (ไม่หดเป็นหน้าต่างเล็ก)",
           w.calls == ["minimize", "maximize", "on_top=True", "on_top=False"], str(w.calls))
     w2 = Win()
-    hook2 = desktop._make_ui_hook(w2)
+    hook2 = desktop._make_ui_hook(w2, sync=True)
     hook2("done")
     check("ไม่ได้ย่ออยู่ (เต็มจอ) → ไม่เรียก restore (WinForms จะหดหน้าต่าง) แค่ดันขึ้นหน้าสุด",
           "restore" not in w2.calls and "maximize" not in w2.calls and "on_top=True" in w2.calls, str(w2.calls))
     w3 = Win()
     w3.native.WindowState = "Normal"
-    hook3 = desktop._make_ui_hook(w3)
+    hook3 = desktop._make_ui_hook(w3, sync=True)
     hook3("minimize")
     hook3("restore")
     check("ย่อจากหน้าต่างปกติ → ผู้ใช้กด 👁 → restore (ไม่ดันขึ้นหน้าสุดสำหรับ restore)",
           w3.calls == ["minimize", "restore"], str(w3.calls))
     desktop._flash_taskbar(w3)
     check("กะพริบ taskbar บนเครื่องที่ไม่ใช่ Windows → ไม่ล้ม", True)
+
+    class SlowWin(Win):                         # หน้าต่างค้าง (UI thread ไม่ตอบ) — Invoke ของ pywebview รอนาน
+        def minimize(self):
+            time.sleep(1.5)
+            super().minimize()
+    w4 = SlowWin()
+    hook4 = desktop._make_ui_hook(w4)
+    t0 = time.time()
+    hook4("minimize")
+    hook4("done")
+    took = time.time() - t0
+    for _ in range(60):
+        if w4.calls[-1:] == ["on_top=False"]:
+            break
+        time.sleep(0.05)
+    check("hook ไม่บล็อกงานค้น (หน้าต่างช้า/ค้าง) · ทำตามลำดับในเธรดของตัวเอง",
+          took < 0.2 and w4.calls == ["minimize", "maximize", "on_top=True", "on_top=False"], f"{took:.2f}s {w4.calls}")
+
+    class Ev:
+        def __init__(self, on):
+            self.on = on
+
+        def is_set(self):
+            return self.on
+
+    w5 = Win()
+    w5.events = type("E", (), {"shown": Ev(False)})()
+    desktop._make_ui_hook(w5, sync=True)("minimize")
+    check("หน้าต่างยังไม่แสดง → ข้าม (ไม่ให้ pywebview รอ 'shown' 20 วิ)", w5.calls == [])
+    check("ไม่มี WebView2 (เปิดในเบราว์เซอร์แทน) → ถอด hook", "server.manager.ui_hook = None" in
+          (APP / "desktop.py").read_text(encoding="utf-8"))
     dsrc = (APP / "desktop.py").read_text(encoding="utf-8")
     check("desktop.py ผูก hook กับงานค้น (server.manager.ui_hook)", "server.manager.ui_hook = _make_ui_hook(" in dsrc)
 
@@ -395,6 +464,8 @@ def main():
         "2026-10-03T01:37:48+07:00": "2026-10-03T01:37:48",
         "": "",
         "เมื่อวาน": "เมื่อวาน",
+        "Fri Oct 02 2026 18:37:48 GMT": "2026-10-03T01:37:48",
+        "Sat Dec 30 1899 00:00:00 GMT+0642 (Indochina Time)": T("Sat Dec 30 1899 00:00:00 GMT+0642 (Indochina Time)"),
     }
     got = {k: T(k) for k in cases}
     check("ข้อความวันที่แบบ JS / ISO UTC / ISO ไม่มีเขตเวลา → ISO เวลาเครื่องนี้ · อ่านไม่ออก = คงเดิม",
@@ -645,6 +716,14 @@ def ui_checks(member_uid):
         page.click('#sideMode [data-side="show"]')
         page.wait_for_timeout(300)
         check("📌 แสดง → กลับเป็นเมนูเต็ม", sw() == 240 and lbl_vis())
+        page.click('#sideMode [data-side="mini"]')
+        page.set_viewport_size({"width": 820, "height": 860})
+        page.wait_for_timeout(300)
+        check("จอแคบ (<900px) ที่จำโหมดซ่อนไว้ → เมนูแนวนอนพร้อมชื่อเมนู (ไม่ติดอยู่ที่ไอคอนล้วน)",
+              lbl_vis() and overflow() <= 1, str(overflow()))
+        page.set_viewport_size({"width": 1366, "height": 860})
+        page.click('#sideMode [data-side="show"]')
+        page.wait_for_timeout(300)
 
         # ---- ⏱ เริ่มค้นอัตโนมัติใน N วินาที ----
         goto("run")
@@ -698,7 +777,8 @@ def ui_checks(member_uid):
 
         # ---- แถบสถานะ: ปุ่ม 👁 แสดง/ซ่อน Chrome + วงแหวนนับถอยหลังตามวินาทีที่ตั้ง ----
         mg = server.manager
-        mg.state, mg.browser_open, mg.hidden, mg.current_user_id = "running", True, True, 0
+        # ระหว่างค้น browser_open เป็นเท็จเสมอ (เป็นจริงหลังจบรอบเท่านั้น) — ปุ่มต้องโผล่ตามสถานะรอบ
+        mg.state, mg.browser_open, mg.hidden, mg.current_user_id = "running", False, True, 0
         page.wait_for_function("!document.getElementById('btnWinToggle').classList.contains('hidden')", timeout=8000)
         check("กำลังค้น + Chrome ซ่อนอยู่ → ปุ่ม '👁 แสดง Chrome'", page.inner_text("#btnWinToggle").strip() == "👁 แสดง Chrome")
         page.click("#btnWinToggle")
