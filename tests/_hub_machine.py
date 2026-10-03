@@ -213,6 +213,34 @@ for cmd in json.loads(sys.stdin.read() or "[]"):
             res = hub.drive_config(cfg.get("hub_url"), cfg.get("hub_token"),
                                    admin_token=server._admin_token() or None)
         out[key] = res
+    # ---- v3.15.0: บัญชีในเครื่องเดี่ยว → คำขอสมัครอัตโนมัติ ----
+    elif op == "setup_local":                    # ตั้งค่าเครื่องแบบเครื่องเดี่ยว (ไม่มีรหัสเชื่อมต่อ) — Super Admin ของเครื่องนี้
+        r = c.post("/api/setup", json={"username": cmd["u"], "password": cmd["p"], "password2": cmd["p"],
+                                       "display_name": cmd.get("name", "")})
+        out[key] = [r.status_code, r.get_json()]
+    elif op == "connect":                        # วางรหัสเชื่อมต่อทีหลัง (Setting → ศูนย์กลาง)
+        r = c.post("/api/hub/connect", json={"code": cmd["code"]})
+        out[key] = [r.status_code, r.get_json()]
+    elif op == "user_full":                      # ธงซิงก์ทั้งหมดของบัญชีนี้ (ไม่รวมแฮช)
+        with db.get_conn() as conn:                 # SELECT * — รันกับรุ่นเก่า (CRIMES_APP_DIR) ที่ยังไม่มีคอลัมน์ใหม่ได้
+            row = conn.execute("SELECT * FROM users WHERE username=?", (cmd["u"],)).fetchone()
+        if row:
+            full = dict(row)
+            d = {k: full.get(k, 0) for k in ("username", "display_name", "role", "permissions", "active", "pending",
+                                             "join_req", "hub_rev", "sync_dirty", "sync_signed", "password_hash")}
+            d["permissions"] = json.loads(d["permissions"] or "{}")
+            d["pw_tail"] = (d.pop("password_hash") or "")[-8:]
+            out[key] = d
+        else:
+            out[key] = None
+    elif op == "presence_rows":                  # สิ่งที่เครื่องนี้ส่งขึ้นศูนย์กลางเป็นสถานะสมาชิก
+        out[key] = db.presence_rows()
+    elif op == "approve":
+        r = c.post(f"/api/admin/members/{uid_of(cmd['u'])}/approve", json=cmd.get("fields") or {})
+        out[key] = [r.status_code, r.get_json()]
+    elif op == "list_api":                       # /api/admin/members ในสายตาคนที่ล็อกอินอยู่
+        r = c.get("/api/admin/members")
+        out[key] = [r.status_code, r.get_json()]
     elif op in ("get", "post", "put", "delete"):  # เรียก API ใดก็ได้ (ใช้เตรียมสถานการณ์)
         r = getattr(c, op)(cmd["path"], json=cmd.get("json")) if op != "get" else c.get(cmd["path"])
         out[key] = [r.status_code, r.get_json()]
