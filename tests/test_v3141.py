@@ -129,6 +129,36 @@ def main():
     check("ปุ่ม 'ยืนยันรหัสผ่านเพื่อใช้สิทธิ์' ซ่อนเมื่อศูนย์กลางไม่รับ (ช่วยไม่ได้ — ต้องผูกใหม่)",
           "!st.admin_rejected && (st.admin_bound || st.admin_legacy)" in html)
 
+    print("\n── Codex P2 (PR #44): คำตอบ 'ไม่รับ' ที่มาช้าของคำขอที่เซ็นด้วยรหัสเก่า ต้องไม่ล้มการผูกใหม่ที่เพิ่งสำเร็จ ──")
+    r = c.post("/api/hub/admin/bind", json={"admin_token": ADMIN[0], "password": "secret9"})
+    check("(เตรียม) ผูกกับรหัสปัจจุบัน", r.status_code == 200 and c.get("/api/hub/state").get_json().get("admin_unlocked") is True)
+    stale_tok = ADMIN[0]
+    ADMIN[0] = "rotated-admin-v3141-RR!"            # เจ้าของเปลี่ยน ADMIN_TOKEN ในสคริปต์
+    user = db.get_user(c.get("/api/me").get_json()["id"])
+    real_post = server.hub._post
+    state = {"armed": True}
+
+    def racing_post(url, payload, tok, admin_token=None, timeout=None):
+        # ซิงก์กองกลางเซ็นด้วยรหัสเก่าไปแล้ว — ระหว่างรอคำตอบ ผู้ใช้กดผูกใหม่ด้วยรหัสปัจจุบันสำเร็จ แล้วคำตอบ 'ไม่รับ' จึงมาถึง
+        if state["armed"] and payload.get("kind") == "ledger" and admin_token == stale_tok:
+            state["armed"] = False
+            state["bind"] = server._admin_bind(user, ADMIN[0], "secret9", reason="test")
+        return real_post(url, payload, tok, admin_token, timeout)
+    server.hub._post = racing_post
+    try:
+        led = server._ledger_sync_now("manual")
+    finally:
+        server.hub._post = real_post
+    hs = c.get("/api/hub/state").get_json()
+    check("ผูกใหม่ระหว่างที่คำขอเก่ารอคำตอบ → สำเร็จ · คำตอบเก่า 'ไม่รับ' ถูกทิ้ง: ยังถือสิทธิ์ · ไม่ขึ้นธงไม่รับ",
+          (state.get("bind") or {}).get("ok") is True and led.get("admin") is False
+          and hs.get("admin_unlocked") is True and hs.get("admin_rejected") is False,
+          str({"bind": state.get("bind"), "led_admin": led.get("admin"),
+               "unlocked": hs.get("admin_unlocked"), "rejected": hs.get("admin_rejected")}))
+    led = server._ledger_sync_now("manual")
+    check("ซิงก์ถัดไปเซ็นด้วยรหัสใหม่ → ศูนย์กลางรับ", led.get("admin") is True
+          and c.get("/api/hub/state").get_json().get("admin_rejected") is False)
+
     print(f"\nผล: ผ่าน {PASS} · ตก {FAIL}")
     return 1 if FAIL else 0
 

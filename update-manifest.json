@@ -1,7 +1,7 @@
 {
   "version": "3.14.1",
   "url": "https://raw.githubusercontent.com/bng1689-dev/C-auto-updates/main/CRIMES_AUTO_update_v3.14.1.zip",
-  "sha256": "1ed1f932f062eac480f38b025e32153b968e25531a4e61a013d9bcacc83789ca",
+  "sha256": "fdbe072fdd11220a14b592250702f1d6d5eab694c6d5ebd895cc62ad1abb17b2",
   "open": false,
   "notes": "แก้หน้าตั้งค่าขึ้น 'ศูนย์กลางไม่รับ ADMIN_TOKEN' ทั้งที่ใช้งานได้ปกติ — ตอนนี้เตือนเฉพาะเมื่อศูนย์กลางปฏิเสธจริง (ADMIN_TOKEN ในสคริปต์ถูกเปลี่ยน) · ถ้าศูนย์กลางไม่รับจริง: กด 'ผูกใหม่' ด้วย ADMIN_TOKEN ปัจจุบัน แล้วการแก้สมาชิกที่ค้างจะส่งขึ้นศูนย์กลางให้ทันที"
 }
