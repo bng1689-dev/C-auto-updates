@@ -175,6 +175,31 @@ def main():
           hub_members()["jojo"]["rev"] == rev_jojo and b["pend"] == 0, str(b["pend"]))
     jojo_tail_new = b["jojo"]["pw_tail"]
 
+    print("\n── Codex P1 (PR #45): เครื่อง D มีบัญชีในเครื่องชื่อ 'lipcup' ซ้ำกับคำขอที่ B ส่งไว้ ──")
+    lip_hub_hash = hub_members()["lipcup"]["password_hash"]
+    d = machine_b([
+        {"op": "setup_local", "u": "ownerd", "p": "ownerd99", "name": "เจ้าของ D"},
+        {"op": "create", "u": "lipcup", "p": "dlip999", "name": "LIP (D)"},
+        {"op": "connect", "code": CODE},
+        {"op": "sync", "as": "s1"},
+        {"op": "user_full", "u": "lipcup", "as": "lip"},
+        {"op": "pending", "as": "pend"},
+        {"op": "logout"},
+        {"op": "login", "u": "lipcup", "p": "dlip999", "as": "login_lip"},
+        {"op": "logout", "as": "lo2"},
+        {"op": "login", "u": "boss", "p": "secret9", "as": "login_boss"},
+        {"op": "approve", "u": "lipcup", "fields": {"role": "member"}, "as": "ap"},
+    ], data="D")
+    hm = hub_members()
+    check("D: บัญชีในเครื่องชื่อซ้ำกับคำขอของ B ไม่ถูกทับ — ยังเปิดใช้งาน · แฮชของ D เอง · เข้าสู่ระบบได้ระหว่างรอ",
+          d["lip"]["active"] == 1 and d["lip"]["pending"] == 0 and d["lip"]["join_req"] == 2
+          and d["login_lip"][0] == 200, str([d["lip"], d["login_lip"]])[:300])
+    check("D: คำขอของ B บนศูนย์กลางไม่ถูกเครื่อง D ทับ (แฮชเดิม) · ไม่ค้าง 'รอส่ง'",
+          hm["lipcup"]["password_hash"] == lip_hub_hash and _truthy(hm["lipcup"]["pending"]) and d["pend"] == 0,
+          str(d["pend"]))
+    check("D: อนุมัติชื่อซ้ำที่เครื่อง D ไม่ได้ (จะส่งรหัสของ D ทับคำขอของ B) → 400",
+          d["login_boss"][0] == 200 and d["ap"][0] == 400 and (d["ap"][1] or {}).get("join_req") is True, str(d["ap"]))
+
     print("\n── เครื่อง A (B ออฟไลน์): เห็นคำขอ → อนุมัติพร้อมสิทธิ์ · ปฏิเสธ · แก้ต่อได้ ──")
     server._members_sync_now("manual")
     lst = {m["username"]: m for m in c.get("/api/admin/members").get_json()}
@@ -260,6 +285,17 @@ def main():
           and perms_of(hm["lipcup"]) == {"view_live"} and b["lipcup"]["join_req"] == 0
           and b["lipcup"]["permissions"] == {k: k == "view_live" for k in b["lipcup"]["permissions"]}
           and str(hm["lipcup"]["password_hash"])[-8:] == b["lipcup"]["pw_tail"], str([hm["lipcup"], b["lipcup"]])[:400])
+
+    d = machine_b([
+        {"op": "sync", "as": "s"},
+        {"op": "user_full", "u": "lipcup", "as": "lip"},
+        {"op": "login", "u": "lipcup", "p": "dlip999", "as": "login_d"},
+        {"op": "login", "u": "lipcup", "p": "lip2222", "as": "login_b"},
+    ], data="D")
+    check("D หลังอนุมัติ: ได้ค่าและรหัสผ่านตามคำขอที่ Superadmin อนุมัติ (ของ B) — รหัสของ D ใช้ไม่ได้ (กันยึดบัญชีผู้ขอ)",
+          d["lip"]["join_req"] == 0 and d["lip"]["active"] == 1 and d["lip"]["permissions"].get("view_live") is True
+          and d["lip"]["pw_tail"] == str(hub_members()["lipcup"]["password_hash"])[-8:]
+          and d["login_d"][0] != 200 and d["login_b"][0] == 200, str([d["lip"], d["login_d"][0], d["login_b"][0]]))
 
     print("\n── บทบาทมาจาก Superadmin: อนุมัติ bossb เป็นสมาชิกธรรมดา ──")
     server._members_sync_now("manual")
